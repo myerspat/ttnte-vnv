@@ -90,7 +90,7 @@ jobs:
 
       - name: Run V&V suite (2 MPI ranks)
         run: |
-          xvfb-run -a mpirun -n 2 pytest --with-mpi benchmarks --vnv-label "2 MPI Ranks" --html=report_mpi.html --self-contained-html
+          xvfb-run -a mpirun -n 2 pytest --with-mpi benchmarks --vnv-label "2 MPI Ranks" --limited --html=report_mpi.html --self-contained-html
 
       - name: Upload V&V report (2 MPI ranks)
         if: always()
