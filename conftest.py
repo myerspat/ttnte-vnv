@@ -1,3 +1,9 @@
+import mpi4py
+
+# Tell mpi4py to leave MPI initialization and finalization to the C++ backend
+mpi4py.rc.initialize = False
+mpi4py.rc.finalize = False
+
 import os
 import base64
 import pytest
