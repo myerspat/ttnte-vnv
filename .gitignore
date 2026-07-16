@@ -3,6 +3,11 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Testing specific
+*.html
+*.png
+assets/
+
 # C extensions
 *.so
 

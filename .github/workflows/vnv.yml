@@ -1,0 +1,101 @@
+# Verification & Validation suite for ttnte, run against the ttnte `develop`
+# branch. This is separate from ttnte's own per-PR CI: it builds ttnte from
+# source, runs the (slower) benchmark suite in this repo, and publishes an
+# HTML report + plots as a workflow artifact and job summary.
+name: VNV
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+  push: {}
+  # Fired by ttnte's CI.yml after a push to its `develop` branch, so a
+  # regression shows up immediately instead of waiting for the weekly run.
+  repository_dispatch:
+    types: [ttnte-develop-push]
+
+concurrency:
+  group: vnv-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  vnv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout ttnte-vnv
+        uses: actions/checkout@v4
+
+      - name: Checkout ttnte (develop)
+        uses: actions/checkout@v4
+        with:
+          repository: myerspat/ttnte
+          ref: ${{ github.event.client_payload.sha || 'develop' }}
+          submodules: recursive
+          path: ttnte
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies (MPI and Linear Algebra)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libppl-dev \
+            openmpi-bin \
+            libopenmpi-dev \
+            libblas-dev \
+            liblapack-dev \
+            ninja-build
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-mpi pytest-html mpi4py scikit-build-core
+
+          # Install igakit and geomdl
+          pip install https://github.com/dalcinl/igakit/archive/refs/heads/master.zip --no-cache-dir
+          SETUPTOOLS_USE_CYTHON=1 pip install git+https://github.com/orbingol/NURBS-Python.git --no-cache-dir
+
+          # Install torch
+          pip install "torch>=2.9.0" --index-url https://download.pytorch.org/whl/cpu --no-cache-dir
+
+          # Install torchTT
+          pip install git+https://github.com/ion-g-ion/torchTT
+
+      - name: Build and install ttnte
+        working-directory: ttnte
+        run: |
+          make install VERBOSE=ON USE_CUDA=OFF JOBS=$(nproc)
+
+      - name: Run V&V suite (no MPI)
+        run: |
+          pytest benchmarks --vnv-label "No MPI" --html=report_no_mpi.html --self-contained-html
+
+      - name: Upload V&V report (no MPI)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vnv-report-no-mpi
+          path: |
+            report_no_mpi.html
+            *.png
+          retention-days: 90
+
+      - name: Run V&V suite (2 MPI ranks)
+        run: |
+          mpirun -n 2 pytest --with-mpi benchmarks --vnv-label "2 MPI Ranks" --html=report_mpi.html --self-contained-html
+
+      - name: Upload V&V report (2 MPI ranks)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vnv-report-mpi
+          path: |
+            report_mpi.html
+            *.png
+          retention-days: 90
