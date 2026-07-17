@@ -1,9 +1,3 @@
-import mpi4py
-
-# Tell mpi4py to leave MPI initialization and finalization to the C++ backend
-mpi4py.rc.initialize = False
-mpi4py.rc.finalize = False
-
 import os
 import base64
 import pytest
@@ -51,41 +45,50 @@ def pytest_sessionfinish(session, exitstatus):
     """
     Hook executed at the very end of the entire test run.
     """
-    if mpi_context.rank != 0:
-        return
+    if mpi_context.rank == 0:
+        summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
 
-    summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
-
-    if summary_file and VNV_RESULTS:
-        with open(summary_file, "a") as f:
-            f.write(f"## {_vnv_title('🚀 ttnte Verification & Validation Summary')}\n")
-            f.write(
-                "| Test Name | ttnte $k_{eff}$ | Reference $k_{eff}$ | Error Breakdown | Status |\n"
-            )
-            f.write("| --- | --- | --- | --- | --- |\n")
-
-            for res in VNV_RESULTS:
-                status = "✅ PASSED" if res["passed"] else "❌ FAILED"
-                ref_k = res.get("ref_k", res.get("openmc_k", 0.0))
-
-                # Build pure breakdown items without Max entry
-                if "detailed_errors" in res and isinstance(
-                    res["detailed_errors"], dict
-                ):
-                    breakdown_items = []
-                    for label, err_val in res["detailed_errors"].items():
-                        breakdown_items.append(f"• {label}: {err_val:.5g}")
-                    error_str = "<br>".join(breakdown_items)
-                else:
-                    error_str = "N/A"
-
+        if summary_file and VNV_RESULTS:
+            with open(summary_file, "a") as f:
                 f.write(
-                    f"| {res['name']} | {res['ttnte_k']:.5f} | {ref_k:.5f} | "
-                    f"{error_str} | {status} |\n"
+                    f"## {_vnv_title('🚀 ttnte Verification & Validation Summary')}\n"
                 )
-            f.write(
-                "\n\n*💡 Note: The complete HTML report containing 2D spatial error plots is attached below as a workflow artifact.*"
-            )
+                f.write(
+                    "| Test Name | ttnte $k_{eff}$ | Reference $k_{eff}$ | Error Breakdown | Status |\n"
+                )
+                f.write("| --- | --- | --- | --- | --- |\n")
+
+                for res in VNV_RESULTS:
+                    status = "✅ PASSED" if res["passed"] else "❌ FAILED"
+                    ref_k = res.get("ref_k", res.get("openmc_k", 0.0))
+
+                    # Build pure breakdown items without Max entry
+                    if "detailed_errors" in res and isinstance(
+                        res["detailed_errors"], dict
+                    ):
+                        breakdown_items = []
+                        for label, err_val in res["detailed_errors"].items():
+                            breakdown_items.append(f"• {label}: {err_val:.5g}")
+                        error_str = "<br>".join(breakdown_items)
+                    else:
+                        error_str = "N/A"
+
+                    f.write(
+                        f"| {res['name']} | {res['ttnte_k']:.5f} | {ref_k:.5f} | "
+                        f"{error_str} | {status} |\n"
+                    )
+                f.write(
+                    "\n\n*💡 Note: The complete HTML report containing 2D spatial error plots is attached below as a workflow artifact.*"
+                )
+
+    # Ensure MPI closes correctly
+    try:
+        from mpi4py import MPI
+
+        if MPI.Is_initialized() and not MPI.Is_finalized():
+            MPI.COMM_WORLD.Barrier()
+    except Exception:
+        pass
 
 
 def pytest_addoption(parser):
