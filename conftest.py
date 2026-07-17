@@ -6,6 +6,7 @@ from ttnte import mpi_context  # <-- Import your MPI context!
 
 VNV_RESULTS = []
 VNV_LABEL = ""
+_EXIT_STATUS = 0
 
 
 def pytest_configure(config):
@@ -45,50 +46,44 @@ def pytest_sessionfinish(session, exitstatus):
     """
     Hook executed at the very end of the entire test run.
     """
-    if mpi_context.rank == 0:
-        summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+    global _EXIT_STATUS
+    _EXIT_STATUS = exitstatus
 
-        if summary_file and VNV_RESULTS:
-            with open(summary_file, "a") as f:
+    if mpi_context.rank != 0:
+        return
+
+    summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+
+    if summary_file and VNV_RESULTS:
+        with open(summary_file, "a") as f:
+            f.write(f"## {_vnv_title('🚀 ttnte Verification & Validation Summary')}\n")
+            f.write(
+                "| Test Name | ttnte $k_{eff}$ | Reference $k_{eff}$ | Error Breakdown | Status |\n"
+            )
+            f.write("| --- | --- | --- | --- | --- |\n")
+
+            for res in VNV_RESULTS:
+                status = "✅ PASSED" if res["passed"] else "❌ FAILED"
+                ref_k = res.get("ref_k", res.get("openmc_k", 0.0))
+
+                # Build pure breakdown items without Max entry
+                if "detailed_errors" in res and isinstance(
+                    res["detailed_errors"], dict
+                ):
+                    breakdown_items = []
+                    for label, err_val in res["detailed_errors"].items():
+                        breakdown_items.append(f"• {label}: {err_val:.5g}")
+                    error_str = "<br>".join(breakdown_items)
+                else:
+                    error_str = "N/A"
+
                 f.write(
-                    f"## {_vnv_title('🚀 ttnte Verification & Validation Summary')}\n"
+                    f"| {res['name']} | {res['ttnte_k']:.5f} | {ref_k:.5f} | "
+                    f"{error_str} | {status} |\n"
                 )
-                f.write(
-                    "| Test Name | ttnte $k_{eff}$ | Reference $k_{eff}$ | Error Breakdown | Status |\n"
-                )
-                f.write("| --- | --- | --- | --- | --- |\n")
-
-                for res in VNV_RESULTS:
-                    status = "✅ PASSED" if res["passed"] else "❌ FAILED"
-                    ref_k = res.get("ref_k", res.get("openmc_k", 0.0))
-
-                    # Build pure breakdown items without Max entry
-                    if "detailed_errors" in res and isinstance(
-                        res["detailed_errors"], dict
-                    ):
-                        breakdown_items = []
-                        for label, err_val in res["detailed_errors"].items():
-                            breakdown_items.append(f"• {label}: {err_val:.5g}")
-                        error_str = "<br>".join(breakdown_items)
-                    else:
-                        error_str = "N/A"
-
-                    f.write(
-                        f"| {res['name']} | {res['ttnte_k']:.5f} | {ref_k:.5f} | "
-                        f"{error_str} | {status} |\n"
-                    )
-                f.write(
-                    "\n\n*💡 Note: The complete HTML report containing 2D spatial error plots is attached below as a workflow artifact.*"
-                )
-
-    # Ensure MPI closes correctly
-    try:
-        from mpi4py import MPI
-
-        if MPI.Is_initialized() and not MPI.Is_finalized():
-            MPI.COMM_WORLD.Barrier()
-    except Exception:
-        pass
+            f.write(
+                "\n\n*💡 Note: The complete HTML report containing 2D spatial error plots is attached below as a workflow artifact.*"
+            )
 
 
 def pytest_addoption(parser):
@@ -105,6 +100,25 @@ def pytest_addoption(parser):
         help="Label distinguishing this run (e.g. 'No MPI', '2 MPI Ranks') "
         "in the summary tables",
     )
+
+
+def pytest_unconfigure(config):
+    """
+    This hook runs absolutely last, AFTER pytest-html has successfully
+    written report_mpi.html to the disk.
+    """
+    # 1. Synchronize and Finalize safely
+    try:
+        from mpi4py import MPI
+
+        if MPI.Is_initialized() and not MPI.Is_finalized():
+            MPI.COMM_WORLD.Barrier()
+            MPI.Finalize()
+    except Exception:
+        pass
+
+    # 2. Instantly terminate to prevent Torch/C++ static destructor segfaults
+    os._exit(_EXIT_STATUS)
 
 
 def pytest_collection_modifyitems(config, items):
