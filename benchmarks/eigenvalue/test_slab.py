@@ -137,7 +137,7 @@ def test_research_reactor(request):
             kickrank=4,
             local_iterations=200,
             resets=4,
-            rmax=500,
+            max_rank=500,
         )
     )
     dd_solver = IGADDSolver(driver.mesh, strategy)

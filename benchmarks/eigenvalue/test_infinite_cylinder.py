@@ -23,9 +23,11 @@ from ttnte.solvers import (
     MemoryPolicy,
     AMEnSolver,
     BlockJacobiStrategy,
+    StaticFreezePolicy,
     ExecMode,
     CommMode,
 )
+from ttnte.linalg import AMEnNativeOptions, AMEnEnrichmentMode
 
 
 def evaluate_radius(patch, field, r, dtype, max_iter=10, tol=1e-8):
@@ -187,9 +189,16 @@ def test_infinite_cylinder(request):
             kickrank=4,
             local_iterations=100,
             resets=4,
-            rmax=500,
+            max_rank=500,
+            native_opts=AMEnNativeOptions(
+                enrichment_mode=AMEnEnrichmentMode.FULL,
+                als_residual_rank=0,
+                proximal_regularization=0.01,
+                gmres_mixed_precision=True,
+            ),
+            enrichment_policy=StaticFreezePolicy(freeze_eps=1e-4),
         ),
-        tol=1e-4,
+        tol=1e-6,
         max_iter=500,
         verbose=True,
     )
@@ -208,7 +217,7 @@ def test_infinite_cylinder(request):
         resolution=25,
         solution=scalar_result.select_group(0),
         filename=generated_plots[-1],
-        feild_label=r"$\phi$",
+        field_label=r"$\phi$",
     )
 
     # ========================================================================

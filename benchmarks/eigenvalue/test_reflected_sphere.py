@@ -28,6 +28,7 @@ from ttnte.solvers import (
     CommMode,
 )
 from ttnte.parallel import IGADofHeuristic
+from ttnte.linalg import AMEnNativeOptions, AMEnEnrichmentMode
 
 
 def _octant_shell_ctrl(radius):
@@ -276,7 +277,13 @@ def test_reflected_sphere(request):
             kickrank=4,
             local_iterations=200,
             resets=4,
-            rmax=500,
+            max_rank=500,
+            native_opts=AMEnNativeOptions(
+                enrichment_mode=AMEnEnrichmentMode.FULL,
+                als_residual_rank=0,
+                proximal_regularization=0.01,
+                gmres_mixed_precision=True,
+            ),
         )
     )
     dd_solver = IGADDSolver(driver.mesh, strategy)

@@ -24,11 +24,13 @@ from ttnte.solvers import (
     IGADDSolver,
     MemoryPolicy,
     AMEnSolver,
+    StaticFreezePolicy,
     BlockJacobiStrategy,
     ExecMode,
     CommMode,
 )
 from ttnte.parallel import IGADofHeuristic
+from ttnte.linalg import AMEnNativeOptions, AMEnEnrichmentMode
 
 
 def _octant_shell_ctrl(radius):
@@ -301,7 +303,7 @@ def test_sphere(request):
     qset.to_(torch.device("cpu"), dtype)
 
     # Spatial fidelity
-    numel = 4
+    numel = 6
     degree = 2
 
     # pytest specific
@@ -382,6 +384,8 @@ def test_sphere(request):
     config = DGTransportAssemblerConfig()
     config.rounding.eps = 1e-8
     config.cross.eps = config.rounding.eps
+    config.max_dense_size = int(1e10)
+    config.cross_jacobian_inverse = False
     driver.assemble(qset, config)
 
     # ========================================================================
@@ -394,14 +398,21 @@ def test_sphere(request):
     result = driver.solve_eigenvalue(
         AMEnSolver(
             nswp=4,
-            eps=8e-5,
-            eps_forcing=0.01,
+            eps=1e-7,
+            eps_forcing=0.1,
             kickrank=4,
             local_iterations=100,
             resets=4,
-            rmax=500,
+            max_rank=500,
+            native_opts=AMEnNativeOptions(
+                enrichment_mode=AMEnEnrichmentMode.FULL,
+                als_residual_rank=0,
+                proximal_regularization=0.1,
+                gmres_mixed_precision=True,
+            ),
+            enrichment_policy=StaticFreezePolicy(freeze_eps=5e-5),
         ),
-        tol=1e-4,
+        tol=1e-6,
         max_iter=500,
         verbose=True,
     )

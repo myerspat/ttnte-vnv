@@ -23,10 +23,12 @@ from ttnte.solvers import (
     MemoryPolicy,
     AMEnSolver,
     BlockJacobiStrategy,
+    StaticFreezePolicy,
     ExecMode,
     CommMode,
 )
 from ttnte.parallel import IGADofHeuristic
+from ttnte.linalg import AMEnNativeOptions, AMEnEnrichmentMode
 
 
 @pytest.mark.mpi(min_size=1)
@@ -170,14 +172,14 @@ def test_reflected_infinite_cylinder(request):
 
     # ========================================================================
     # Run DD solver
-    outer_tol = 1e-4
-    inner_tol = 5e-5
-    eps = 1e-5
+    outer_tol = 1e-5
+    inner_tol = 1e-6
+    eps = 1e-8
 
     # Create Block-Jacobi DD strategy
     config = DDSolverConfig(
         tol=inner_tol,
-        tol_forcing=0.1,
+        tol_forcing=0.5,
         max_iter=100,
         use_gpu=use_gpu,
         memory_policy=MemoryPolicy.RESIDENT,
@@ -188,13 +190,20 @@ def test_reflected_infinite_cylinder(request):
     strategy = BlockJacobiStrategy(config)
     strategy.set_local_solver(
         AMEnSolver(
-            nswp=10,
+            nswp=4,
             eps=eps,
             eps_forcing=0.01,
             kickrank=4,
             local_iterations=100,
             resets=4,
-            rmax=500,
+            max_rank=500,
+            native_opts=AMEnNativeOptions(
+                enrichment_mode=AMEnEnrichmentMode.FULL,
+                als_residual_rank=0,
+                proximal_regularization=0.01,
+                gmres_mixed_precision=True,
+            ),
+            enrichment_policy=StaticFreezePolicy(freeze_eps=1e-4),
         )
     )
     dd_solver = IGADDSolver(driver.mesh, strategy)

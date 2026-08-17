@@ -1,5 +1,5 @@
-import os
 import base64
+import os
 import pytest
 from pytest_html import extras
 from ttnte import mpi_context  # <-- Import your MPI context!
@@ -16,6 +16,22 @@ def pytest_configure(config):
 
 def _vnv_title(base: str) -> str:
     return f"{base} — {VNV_LABEL}" if VNV_LABEL else base
+
+
+def _get_vnv_values(res: dict):
+    """Safely extract metric label, ttnte value, and reference value.
+
+    Supports both legacy k_eff keys and generic metric keys.
+    """
+    metric = res.get("metric", res.get("metric_name", "k_eff"))
+
+    # Extract ttnte value (generic first, then fallback)
+    ttnte_val = res.get("ttnte_val", res.get("ttnte_k", 0.0))
+
+    # Extract reference value (generic first, then ref_k / openmc_k fallbacks)
+    ref_val = res.get("ref_val", res.get("ref_k", res.get("openmc_k", 0.0)))
+
+    return metric, ttnte_val, ref_val
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -43,9 +59,7 @@ def pytest_runtest_makereport(item, call):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """
-    Hook executed at the very end of the entire test run.
-    """
+    """Hook executed at the very end of the entire test run."""
     global _EXIT_STATUS
     _EXIT_STATUS = exitstatus
 
@@ -58,13 +72,13 @@ def pytest_sessionfinish(session, exitstatus):
         with open(summary_file, "a") as f:
             f.write(f"## {_vnv_title('🚀 ttnte Verification & Validation Summary')}\n")
             f.write(
-                "| Test Name | ttnte $k_{eff}$ | Reference $k_{eff}$ | Error Breakdown | Status |\n"
+                "| Test Name | Metric | ttnte Value | Reference Value | Error Breakdown | Status |\n"
             )
-            f.write("| --- | --- | --- | --- | --- |\n")
+            f.write("| --- | --- | --- | --- | --- | --- |\n")
 
             for res in VNV_RESULTS:
                 status = "✅ PASSED" if res["passed"] else "❌ FAILED"
-                ref_k = res.get("ref_k", res.get("openmc_k", 0.0))
+                metric, ttnte_val, ref_val = _get_vnv_values(res)
 
                 # Build pure breakdown items without Max entry
                 if "detailed_errors" in res and isinstance(
@@ -78,7 +92,7 @@ def pytest_sessionfinish(session, exitstatus):
                     error_str = "N/A"
 
                 f.write(
-                    f"| {res['name']} | {res['ttnte_k']:.5f} | {ref_k:.5f} | "
+                    f"| {res['name']} | {metric} | {ttnte_val:.5f} | {ref_val:.5f} | "
                     f"{error_str} | {status} |\n"
                 )
             f.write(
@@ -103,8 +117,8 @@ def pytest_addoption(parser):
 
 
 def pytest_unconfigure(config):
-    """
-    This hook runs absolutely last, AFTER pytest-html has successfully
+    """This hook runs absolutely last, AFTER pytest-html has successfully
+
     written report_mpi.html to the disk.
     """
     # 1. Synchronize and Finalize safely
@@ -132,27 +146,29 @@ def pytest_collection_modifyitems(config, items):
 
 
 def pytest_html_results_summary(prefix, summary, postfix):
-    """
-    Hook to inject custom HTML into the top of the pytest-html report.
-    """
+    """Hook to inject custom HTML into the top of the pytest-html report."""
     if mpi_context.rank != 0 or not VNV_RESULTS:
         return
 
     table_html = [
         f"<h2>{_vnv_title('🚀 ttnte Verification & Validation Summary')}</h2>",
-        "<table style='width: 100%; border-collapse: collapse; text-align: left; margin-bottom: 20px;' border='1'>",
+        (
+            "<table style='width: 100%; border-collapse: collapse; text-align:"
+            " left; margin-bottom: 20px;' border='1'>"
+        ),
         "<tr style='background-color: #f8f9fa;'>",
         "<th style='padding: 10px; border: 1px solid #ddd;'>Test Name</th>",
-        "<th style='padding: 10px; border: 1px solid #ddd;'>ttnte <i>k</i><sub>eff</sub></th>",
-        "<th style='padding: 10px; border: 1px solid #ddd;'>Reference <i>k</i><sub>eff</sub></th>",
-        "<th style='padding: 10px; border: 1px solid #ddd;'>Error Breakdown</th>",
+        "<th style='padding: 10px; border: 1px solid #ddd;'>Metric</th>",
+        ("<th style='padding: 10px; border: 1px solid #ddd;'>ttnte" " Value</th>"),
+        ("<th style='padding: 10px; border: 1px solid #ddd;'>Reference" " Value</th>"),
+        ("<th style='padding: 10px; border: 1px solid #ddd;'>Error" " Breakdown</th>"),
         "<th style='padding: 10px; border: 1px solid #ddd;'>Status</th>",
         "</tr>",
     ]
 
     for res in VNV_RESULTS:
         status = "✅ PASSED" if res["passed"] else "❌ FAILED"
-        ref_k = res.get("ref_k", res.get("openmc_k", 0.0))
+        metric, ttnte_val, ref_val = _get_vnv_values(res)
 
         # Build pure HTML list items without Max entry
         if "detailed_errors" in res and isinstance(res["detailed_errors"], dict):
@@ -166,8 +182,9 @@ def pytest_html_results_summary(prefix, summary, postfix):
         table_html.append(
             f"<tr>"
             f"<td style='padding: 10px; border: 1px solid #ddd;'>{res['name']}</td>"
-            f"<td style='padding: 10px; border: 1px solid #ddd;'>{res['ttnte_k']:.5f}</td>"
-            f"<td style='padding: 10px; border: 1px solid #ddd;'>{ref_k:.5f}</td>"
+            f"<td style='padding: 10px; border: 1px solid #ddd;'>{metric}</td>"
+            f"<td style='padding: 10px; border: 1px solid #ddd;'>{ttnte_val:.5f}</td>"
+            f"<td style='padding: 10px; border: 1px solid #ddd;'>{ref_val:.5f}</td>"
             f"<td style='padding: 10px; border: 1px solid #ddd;'>{error_html}</td>"
             f"<td style='padding: 10px; border: 1px solid #ddd;'>{status}</td>"
             f"</tr>"

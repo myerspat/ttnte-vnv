@@ -27,9 +27,11 @@ from ttnte.solvers import (
     IGADDSolver,
     ExecMode,
     CommMode,
+    StaticFreezePolicy,
 )
 from ttnte.visualization.style import get_patch_style
 from ttnte.parallel import IGADofHeuristic
+from ttnte.linalg import AMEnNativeOptions, AMEnEnrichmentMode
 from ttnte.xs.benchmarks import c5g7
 
 
@@ -75,11 +77,11 @@ def test_c5g7_pincell_2d(request):
     torch.autograd.set_grad_enabled(False)
 
     # Create angular quadrature
-    qset = ProductQuadrature.gauss_legendre_chebyshev(8, 8, 2)
-    qset.to_(torch.device("cpu"), dtype)
+    qset = ProductQuadrature.gauss_legendre_chebyshev(16, 16, 2)
+    qset.to_(cpu, dtype)
 
     # Spatial fidelity
-    numel = 6
+    numel = 12
     degree = 2
 
     # pytest specific
@@ -163,17 +165,58 @@ def test_c5g7_pincell_2d(request):
     # ========================================================================
     # Assemble operators
     config = DGTransportAssemblerConfig()
-    config.rounding.eps = 1e-6
+    config.rounding.eps = 1e-8
     config.cross.eps = config.rounding.eps
     config.max_dense_size = int(1e10)
     config.cross_jacobian_inverse = False
     driver.assemble(qset, config)
 
+    for patch in mesh.blocks:
+        assembler = driver.get_assembler(patch.gid)
+
+        string = f"GID: {patch.gid}\n"
+
+        op = assembler.interior_loss_op.as_tt()
+        string += f"H: Ranks = {op.ranks}, CR = {op.compression}\n"
+        op = assembler.scatter_op.as_tt()
+        string += f"S: Ranks = {op.ranks}, CR = {op.compression}\n"
+
+        if assembler.fission_op.defined():
+            op = assembler.fission_op.as_tt()
+            string += f"F: Ranks = {op.ranks}, CR = {op.compression}\n"
+
+        for op in assembler.inflow_ops:
+            op = op.as_tt()
+            string += f"Bin: Ranks = {op.ranks}, CR = {op.compression}\n"
+        for op in assembler.outflow_ops:
+            op = op.as_tt()
+            string += f"Bout: Ranks = {op.ranks}, CR = {op.compression}\n"
+
+        print(string, end="")
+
     # ========================================================================
     # Run DD solver
-    outer_tol = 1e-4
-    inner_tol = 5e-5
-    eps = 1e-5
+    outer_tol = 1e-6
+    inner_tol = 5e-7
+    eps = 1e-7
+
+    # Local solver
+    local_solver = AMEnSolver(
+        nswp=4,
+        eps=eps,
+        eps_forcing=0.01,
+        kickrank=4,
+        local_iterations=200,
+        resets=4,
+        max_rank=200,
+        native_opts=AMEnNativeOptions(
+            enrichment_mode=AMEnEnrichmentMode.FULL,
+            als_residual_rank=0,
+            proximal_regularization=0.01,
+            gmres_mixed_precision=True,
+        ),
+        enrichment_policy=StaticFreezePolicy(freeze_eps=1e-4),
+    )
 
     # Create Block-Jacobi DD strategy
     config = DDSolverConfig(
@@ -187,22 +230,12 @@ def test_c5g7_pincell_2d(request):
         verbose=True,
     )
     strategy = BlockJacobiStrategy(config)
-    strategy.set_local_solver(
-        AMEnSolver(
-            nswp=10,
-            eps=eps,
-            eps_forcing=0.01,
-            kickrank=4,
-            local_iterations=200,
-            resets=4,
-            rmax=500,
-        )
-    )
+    strategy.set_local_solver(local_solver)
     dd_solver = IGADDSolver(driver.mesh, strategy)
 
-    # Run DD eigenvalue solver
+    # Run power iteration + DD solver
     result = driver.solve_eigenvalue(
-        dd_solver, tol=outer_tol, max_iter=500, verbose=True
+        dd_solver, tol=outer_tol, max_iter=100, verbose=True
     )
 
     # ========================================================================

@@ -76,7 +76,7 @@ jobs:
 
       - name: Run V&V suite (no MPI)
         run: |
-          xvfb-run -a pytest benchmarks --vnv-label "No MPI" --html=report_no_mpi.html --self-contained-html
+          xvfb-run -a pytest benchmarks --vnv-label "No MPI" --html=report_no_mpi.html --self-contained-html --import-mode=importlib
 
       - name: Upload V&V report (no MPI)
         if: always()
@@ -90,7 +90,7 @@ jobs:
 
       - name: Run V&V suite (2 MPI ranks)
         run: |
-          xvfb-run -a mpirun -n 2 pytest --with-mpi benchmarks --vnv-label "2 MPI Ranks" --limited --html=report_mpi.html --self-contained-html
+          xvfb-run -a mpirun -n 2 pytest --with-mpi benchmarks --vnv-label "2 MPI Ranks" --limited --html=report_mpi.html --self-contained-html --import-mode=importlib
 
       - name: Upload V&V report (2 MPI ranks)
         if: always()
