@@ -489,8 +489,8 @@ def test_infinite_cylinder_3patch(request):
     avg_scalar_result = (
         scalar_result.regular_mesh_average(
             [phi_mc.shape[1], phi_mc.shape[2]],
-            [5, 5],
-            seed_resolution=150,
+            [2, 2],
+            seed_resolution=60,
             tol=0.02,
         )
         .moveaxis(-1, 0)

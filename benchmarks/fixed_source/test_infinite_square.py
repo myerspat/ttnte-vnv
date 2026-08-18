@@ -216,7 +216,9 @@ def test_infinite_square(request):
 
     # Average the NURBS solution onto a global regular mesh
     avg_scalar_result = (
-        scalar_result.regular_mesh_average([phi_mc.shape[1], phi_mc.shape[2]], [5, 5])
+        scalar_result.regular_mesh_average(
+            [phi_mc.shape[1], phi_mc.shape[2]], [5, 5], seed_resolution=10
+        )
         .moveaxis(-1, 0)
         .cpu()
         .numpy()
