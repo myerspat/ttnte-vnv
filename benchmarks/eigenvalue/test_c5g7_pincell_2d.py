@@ -202,13 +202,12 @@ def test_c5g7_pincell_2d(request):
 
     # Local solver
     local_solver = AMEnSolver(
-        nswp=4,
+        nswp=1,
         eps=eps,
-        eps_forcing=0.01,
+        eps_forcing=0.1,
         kickrank=4,
-        local_iterations=200,
+        local_iterations=250,
         resets=4,
-        max_rank=200,
         native_opts=AMEnNativeOptions(
             enrichment_mode=AMEnEnrichmentMode.FULL,
             als_residual_rank=0,
@@ -221,7 +220,7 @@ def test_c5g7_pincell_2d(request):
     # Create Block-Jacobi DD strategy
     config = DDSolverConfig(
         tol=inner_tol,
-        tol_forcing=0.1,
+        tol_forcing=0.5,
         max_iter=100,
         use_gpu=use_gpu,
         memory_policy=MemoryPolicy.RESIDENT,
@@ -235,7 +234,7 @@ def test_c5g7_pincell_2d(request):
 
     # Run power iteration + DD solver
     result = driver.solve_eigenvalue(
-        dd_solver, tol=outer_tol, max_iter=100, verbose=True
+        dd_solver, tol=outer_tol, k_tol=1e-6, max_iter=100, verbose=True
     )
 
     # ========================================================================

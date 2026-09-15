@@ -138,21 +138,20 @@ def test_infinite_cylinder(request):
 
     result = driver.solve_fixed_source(
         AMEnSolver(
-            nswp=4,
-            eps=1e-7,
-            eps_forcing=0.01,
+            nswp=1,
+            eps=5e-7,
+            eps_forcing=0.1,
             kickrank=4,
-            local_iterations=100,
+            local_iterations=250,
             resets=4,
-            max_rank=500,
             verbose=True,
             native_opts=AMEnNativeOptions(
-                enrichment_mode=AMEnEnrichmentMode.SIMPLIFIED,
+                enrichment_mode=AMEnEnrichmentMode.FULL,
                 als_residual_rank=0,
-                proximal_regularization=0.1,
+                proximal_regularization=0.01,
                 gmres_mixed_precision=True,
             ),
-            enrichment_policy=StaticFreezePolicy(freeze_eps=1e-4),
+            enrichment_policy=StaticFreezePolicy(freeze_eps=1e-6),
         ),
         tol=1e-5,
         max_iter=100,
@@ -225,7 +224,7 @@ def test_infinite_cylinder(request):
 
 
 @pytest.mark.mpi(min_size=1)
-def test_infinite_cylinder_3patch(request):
+def test_infinite_cylinder_4patch(request):
     passed = True
 
     # ========================================================================
@@ -398,8 +397,8 @@ def test_infinite_cylinder_3patch(request):
     # ========================================================================
     # Run DD solver
     outer_tol = 1e-5
-    inner_tol = 5e-5
-    eps = 1e-7
+    inner_tol = 5e-6
+    eps = 5e-7
 
     # Create Block-Jacobi DD strategy
     config = DDSolverConfig(
@@ -415,31 +414,26 @@ def test_infinite_cylinder_3patch(request):
     strategy = BlockJacobiStrategy(config)
     strategy.set_local_solver(
         AMEnSolver(
-            nswp=4,
+            nswp=1,
             eps=eps,
-            eps_forcing=0.01,
+            eps_forcing=0.1,
             kickrank=4,
-            local_iterations=200,
+            local_iterations=250,
             resets=4,
-            max_rank=500,
             native_opts=AMEnNativeOptions(
-                enrichment_mode=AMEnEnrichmentMode.SIMPLIFIED,
+                enrichment_mode=AMEnEnrichmentMode.FULL,
                 als_residual_rank=0,
                 proximal_regularization=0.01,
                 gmres_mixed_precision=True,
             ),
-            enrichment_policy=AdaptiveRevalidationPolicy(
-                initial_period=4,
-                probe_iterations=2,
-                growth_factor=2,
-                max_period=8,
-                growth_tolerance=0.001,
-            ),
+            enrichment_policy=StaticFreezePolicy(freeze_eps=1e-6),
         )
     )
     dd_solver = IGADDSolver(driver.mesh, strategy)
 
-    result = driver.solve_fixed_source(dd_solver, tol=outer_tol, max_iter=100)
+    result = driver.solve_fixed_source(
+        dd_solver, tol=outer_tol, max_iter=100, verbose=True
+    )
 
     # ========================================================================
     # Plot the solution
