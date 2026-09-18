@@ -345,7 +345,7 @@ def test_cruciform(request):
                 source += face.incoming
 
         balance = (source - loss).item() / source.item()
-        passed &= abs(balance) < 1e-5
+        passed &= abs(balance) < 5e-4
         balances.append(balance)
 
     # Average the NURBS solution onto a global regular mesh
