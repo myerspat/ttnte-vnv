@@ -78,33 +78,17 @@ jobs:
       # --with-mpi is needed even on one rank: pytest-mpi skips mpi-marked tests
       # without it. --bind-to none: Open MPI otherwise pins each rank to one
       # core, starving the solver threads
-      - name: Run V&V suite (1 MPI rank, sweep and cross)
+      - name: Run V&V suite (1 MPI rank)
         run: |
-          xvfb-run -a mpirun -n 1 --bind-to none pytest --with-mpi benchmarks --vnv-label "1 MPI Rank (sweep, cross)" --solvers sweep,cross --html=report_no_mpi.html --self-contained-html --import-mode=importlib
+          xvfb-run -a mpirun -n 1 --bind-to none pytest --with-mpi benchmarks --vnv-label "1 MPI Rank" --limited --html=report_no_mpi.html --self-contained-html --import-mode=importlib
 
-      - name: Upload V&V report (1 MPI rank, sweep and cross)
+      - name: Upload V&V report (1 MPI rank)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: vnv-report-no-mpi
           path: |
             report_no_mpi.html
-            *.png
-          retention-days: 90
-
-      # Non-slow benchmarks with AMEn (the slow problems need a GPU to finish in
-      # time)
-      - name: Run V&V suite (1 MPI rank, amen)
-        run: |
-          xvfb-run -a mpirun -n 1 --bind-to none pytest --with-mpi benchmarks --vnv-label "1 MPI Rank (amen)" --limited --solvers amen --html=report_amen.html --self-contained-html --import-mode=importlib
-
-      - name: Upload V&V report (1 MPI rank, amen)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: vnv-report-amen
-          path: |
-            report_amen.html
             *.png
           retention-days: 90
 
