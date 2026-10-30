@@ -1,5 +1,3 @@
-import os
-
 import pytest
 from igakit.cad import refine
 import torch
@@ -11,23 +9,36 @@ from ttnte.cad.surfaces import circle
 from ttnte.xs.benchmarks import pu239
 from ttnte.cad import Patch
 from ttnte.mesh import IGAMesh
-from ttnte.physics import (
-    BoundaryType,
-    BCPlane,
-    DGTransportAssemblerConfig,
-)
 from ttnte.math import ProductQuadrature
-from ttnte.driver import IGATransportDriver2D
-from ttnte.solvers import (
-    DDSolverConfig,
-    MemoryPolicy,
-    AMEnSolver,
-    BlockJacobiStrategy,
-    StaticFreezePolicy,
-    ExecMode,
-    CommMode,
-)
-from ttnte.linalg import AMEnNativeOptions, AMEnEnrichmentMode
+
+from vnv import record, setup
+
+# Solver settings for this problem, merged over vnv.solvers.DEFAULTS
+# (--solver-opt on the command line wins over these)
+OPTS = {
+    "amen": {
+        "tol": 1e-6,
+        "max_iter": 500,
+        "local": {
+            "nswp": 4,
+            "eps": 8e-5,
+            "eps_forcing": 0.01,
+            "kickrank": 4,
+            "local_iterations": 100,
+            "resets": 4,
+            "max_rank": 500,
+        },
+        "native": {
+            "enrichment_mode": "FULL",
+            "als_residual_rank": 0,
+            "proximal_regularization": 0.01,
+            "gmres_mixed_precision": True,
+        },
+        "freeze_eps": 1e-4,
+    },
+    "sweep": {"tol": 1e-5, "num_threads": 2},
+    "cross": {"tol": 1e-5, "num_threads": 2, "cross": {"num_threads": 2}},
+}
 
 
 def evaluate_radius(patch, field, r, dtype, max_iter=10, tol=1e-8):
@@ -98,30 +109,17 @@ def evaluate_boundary(patch, field, rc, dtype):
     return angular_points[angular_points[:, 0].argsort()]
 
 
-def test_infinite_cylinder(request):
-    passed = True
-
+@pytest.mark.mpi(min_size=1)
+def test_infinite_cylinder(request, solver):
     # ========================================================================
     # Setup
+    setup(max_ranks=1)
     dtype = torch.float64
     cpu = torch.device("cpu")
 
-    # Initialize MPI
-    mpi_context.init()
-    num_threads_per_rank = min(os.cpu_count() // mpi_context.world_size, 8)
-    torch.set_num_threads(num_threads_per_rank)
-
-    # Check MPI size
-    if mpi_context.world_size > 1:
-        pytest.skip("Test requires 1 or fewer processes")
-
-    # Set defaults for PyTorch
-    torch.set_default_dtype(dtype)
-    torch.autograd.set_grad_enabled(False)
-
     # Create angular quadrature
     qset = ProductQuadrature.gauss_legendre_chebyshev(32, 32, 2)
-    qset.to_(torch.device("cpu"), dtype)
+    qset.to_(cpu, dtype)
 
     # Spatial fidelity
     numel = 10
@@ -161,57 +159,12 @@ def test_infinite_cylinder(request):
     )
 
     # ========================================================================
-    # Create transport driver and distribute across MPI ranks
-    # Create the transport driver
-    driver = IGATransportDriver2D(mesh, xs_server, mpi_context)
-
-    # ========================================================================
-    # Assemble operators
-    config = DGTransportAssemblerConfig()
-    config.rounding.eps = 1e-8
-    config.cross.eps = config.rounding.eps
-    config.max_dense_size = int(1e10)
-    config.cross_jacobian_inverse = False
-    driver.assemble(qset, config)
-
-    # ========================================================================
-    # Run DD solver
-    # Send the lone system to the GPU
-    if torch.cuda.is_available():
-        sys = driver.get_system(s0.gid)
-        sys.to_(torch.device("cuda"))
-
-    result = driver.solve_eigenvalue(
-        AMEnSolver(
-            nswp=4,
-            eps=8e-5,
-            eps_forcing=0.01,
-            kickrank=4,
-            local_iterations=100,
-            resets=4,
-            max_rank=500,
-            native_opts=AMEnNativeOptions(
-                enrichment_mode=AMEnEnrichmentMode.FULL,
-                als_residual_rank=0,
-                proximal_regularization=0.01,
-                gmres_mixed_precision=True,
-            ),
-            enrichment_policy=StaticFreezePolicy(freeze_eps=1e-4),
-        ),
-        tol=1e-6,
-        max_iter=500,
-        verbose=True,
-    )
-
-    # Remove the lone system from the GPU
-    if torch.cuda.is_available():
-        sys = driver.get_system(s0.gid)
-        sys.to_(cpu)
+    # Solve
+    result = solver.run(mesh, xs_server, qset, eigenvalue=True, opts=OPTS)
 
     # ========================================================================
     # Plot the solution
-    # Compute the scalar flux
-    scalar_result = result.compute_scalar_flux()
+    scalar_result = result.scalar
     generated_plots.append(f"{request.node.name}_flux.png")
     mesh.plot(
         resolution=25,
@@ -223,7 +176,7 @@ def test_infinite_cylinder(request):
     # ========================================================================
     # Check the solution to the reference analytical solution
     keff_error = (result.k_eff - 1.0) * 1e5
-    passed &= abs(keff_error) < 5
+    passed = abs(keff_error) < 5
 
     # Calculate the field along the boundary
     expected = 0.2926
@@ -267,6 +220,7 @@ def test_infinite_cylinder(request):
     error_rc = np.sqrt(
         np.trapz((points[:, 1] - expected) ** 2, points[:, 0])
     ) / np.sqrt(2 * np.pi * expected**2)
+    passed &= error_rc < 0.008
 
     # Calculate the field along the 0.5rc circle
     expected = 0.8093
@@ -310,6 +264,7 @@ def test_infinite_cylinder(request):
     error_half_rc = np.sqrt(
         np.trapz((points[:, 1] - expected) ** 2, points[:, 0])
     ) / np.sqrt(2 * np.pi * expected**2)
+    passed &= error_half_rc < 0.0002
 
     # ========================================================================
     # Attach data to Pytest for conftest.py to read
@@ -318,17 +273,15 @@ def test_infinite_cylinder(request):
         "Relative L2 error (rc)": error_rc,
         "Relative L2 error (0.5rc)": error_half_rc,
     }
-    for name, error in errors.items():
-        print(f"{name}: {error}")
-
-    request.node.vnv_plots = generated_plots
-    request.node.vnv_metrics = {
-        "name": request.node.name,
-        "ttnte_k": result.k_eff,
-        "ref_k": 1.0,
-        "passed": passed,
-        "detailed_errors": errors,
-    }
+    record(
+        request,
+        result,
+        value=result.k_eff,
+        ref=1.0,
+        passed=passed,
+        errors=errors,
+        plots=generated_plots,
+    )
 
     # Finally, formally assert to fail the test if outside tolerance
     assert (

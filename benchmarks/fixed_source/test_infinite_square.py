@@ -1,42 +1,51 @@
-import os
 from pathlib import Path
 
 import pytest
-from igakit.cad import refine, bilinear
-import torch
+
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-
+import torch
+from igakit.cad import bilinear, refine
 from ttnte import mpi_context
-from ttnte.xs import Material, Server
 from ttnte.cad import Patch
-from ttnte.mesh import IGAMesh
-from ttnte.physics import (
-    BoundaryType,
-    BCPlane,
-    DGTransportAssemblerConfig,
-    FixedSource,
-)
 from ttnte.math import ProductQuadrature
-from ttnte.driver import IGATransportDriver2D
-from ttnte.linalg import AMEnNativeOptions, AMEnEnrichmentMode
-from ttnte.solvers import (
-    DDSolverConfig,
-    MemoryPolicy,
-    AMEnSolver,
-    BlockJacobiStrategy,
-    ExecMode,
-    CommMode,
-    StaticFreezePolicy,
-)
+from ttnte.mesh import IGAMesh
+from ttnte.physics import FixedSource
+from ttnte.xs import Material, Server
+
+from vnv import flux_errors, record, setup, zscores
+
+# Solver settings for this problem, merged over vnv.solvers.DEFAULTS
+# (--solver-opt on the command line wins over these)
+OPTS = {
+    "amen": {
+        "tol": 1e-5,
+        "max_iter": 100,
+        "local": {
+            "nswp": 4,
+            "eps": 1e-7,
+            "eps_forcing": 0.01,
+            "kickrank": 4,
+            "local_iterations": 40,
+            "resets": 2,
+            "max_rank": 500,
+        },
+        "native": {
+            "enrichment_mode": "SIMPLIFIED",
+            "als_residual_rank": 0,
+            "proximal_regularization": 0.001,
+        },
+        "freeze_eps": 1e-4,
+    },
+    "sweep": {"tol": 1e-5, "num_threads": 2},
+    "cross": {"tol": 1e-5, "num_threads": 2, "cross": {"num_threads": 2}},
+}
 
 
-def test_infinite_square(request):
-    passed = True
-
+@pytest.mark.mpi(min_size=1)
+def test_infinite_square(request, solver):
     # ========================================================================
     # Setup
+    setup(max_ranks=1)
     dtype = torch.float64
     cpu = torch.device("cpu")
     ref_dir = (
@@ -49,22 +58,9 @@ def test_infinite_square(request):
         ref_dir.exists() and (ref_dir / "data").exists()
     ), f"Reference data directory not found at {ref_dir / 'data'}"
 
-    # Initialize MPI
-    mpi_context.init()
-    num_threads_per_rank = min(os.cpu_count() // mpi_context.world_size, 8)
-    torch.set_num_threads(num_threads_per_rank)
-
-    # Check MPI size
-    if mpi_context.world_size > 1:
-        pytest.skip("Test requires 1 or fewer processes")
-
-    # Set defaults for PyTorch
-    torch.set_default_dtype(dtype)
-    torch.autograd.set_grad_enabled(False)
-
     # Create angular quadrature
     qset = ProductQuadrature.gauss_legendre_chebyshev(32, 32, 2)
-    qset.to_(torch.device("cpu"), dtype)
+    qset.to_(cpu, dtype)
 
     # Spatial fidelity
     numel = 13
@@ -128,60 +124,17 @@ def test_infinite_square(request):
     )
 
     # ========================================================================
-    # Create transport driver and distribute across MPI ranks
-    # Create the transport driver
-    driver = IGATransportDriver2D(mesh, xs_server, mpi_context)
-
-    # ========================================================================
-    # Assemble operators
-    config = DGTransportAssemblerConfig()
-    config.rounding.eps = 1e-8
-    config.cross.eps = config.rounding.eps
-    config.max_dense_size = int(1e10)
-    config.cross_jacobian_inverse = False
-    driver.assemble(qset, config)
-
-    # ========================================================================
-    # Run DD solver
-    # Send the lone system to the GPU
-    if torch.cuda.is_available():
-        sys = driver.get_system(s0.gid)
-        sys.to_(torch.device("cuda"))
-
-    result = driver.solve_fixed_source(
-        AMEnSolver(
-            nswp=4,
-            eps=1e-7,
-            eps_forcing=0.01,
-            kickrank=4,
-            local_iterations=40,
-            resets=2,
-            max_rank=500,
-            verbose=True,
-            native_opts=AMEnNativeOptions(
-                enrichment_mode=AMEnEnrichmentMode.SIMPLIFIED,
-                als_residual_rank=0,
-                proximal_regularization=0.001,
-            ),
-            enrichment_policy=StaticFreezePolicy(freeze_eps=1e-4),
-        ),
-        tol=1e-5,
-        max_iter=100,
-        clear_assemblers=False,
+    # Solve (balance=True keeps what the particle balances below need)
+    result = solver.run(
+        mesh, xs_server, qset, eigenvalue=False, balance=True, opts=OPTS
     )
-
-    # Remove the lone system from the GPU
-    if torch.cuda.is_available():
-        sys = driver.get_system(s0.gid)
-        sys.to_(cpu)
 
     # ========================================================================
     # Plot the solution
-    scalar_result = result.compute_scalar_flux()
     generated_plots.append(f"fixed_source_{request.node.name}_flux.png")
     mesh.plot(
         resolution=25,
-        solution=scalar_result,
+        solution=result.scalar,
         filename=generated_plots[-1],
         field_label=r"$\phi$",
     )
@@ -196,91 +149,41 @@ def test_infinite_square(request):
     phi_mc_stdev = np.load(data_dir / "mesh_stdev.npy")
 
     # Calculate the leakage fraction error
-    gb = result.global_balance(assemblers=driver.get_assemblers(), eps=0)
+    gb = result.global_balance(eps=0)
     leakage_frac = (gb.leakage / gb.fixed_source).item()
     leakage_frac_error = leakage_frac - leakage_frac_mc[0]
-    passed &= abs(leakage_frac_error) / leakage_frac_mc[1] < 1
+    passed = abs(leakage_frac_error) / leakage_frac_mc[1] < 1
 
     # Calculate the per patch particle balance info
-    table = result.patch_balance_table(assemblers=driver.get_assemblers()).patches[0]
+    table = result.patch_balance_table().patches[0]
     loss = table.scatter_out + table.absorption
     source = table.fixed_source + table.scatter_in
 
     for face in table.faces:
         loss += face.outgoing
-        if face.incoming != None:
+        if face.incoming is not None:
             source += face.incoming
 
     balance = (source - loss).item() / source.item()
     passed &= abs(balance) < 1e-5
 
-    # Average the NURBS solution onto a global regular mesh
-    avg_scalar_result = (
-        scalar_result.regular_mesh_average(
-            [phi_mc.shape[1], phi_mc.shape[2]], [5, 5], seed_resolution=10
-        )
-        .moveaxis(-1, 0)
-        .cpu()
-        .numpy()
-    )
+    # Average the NURBS solution onto a global regular mesh and compare
     flux_tol = 0.04
-
-    # Get the relative L2-errors between ttnte and OpenMC
-    group_errors = np.linalg.norm(
-        (avg_scalar_result - phi_mc).reshape(xs_server.num_groups, -1), axis=1, ord=2
-    ) / np.linalg.norm(phi_mc.reshape(xs_server.num_groups, -1), axis=1, ord=2)
-
-    # Get total error
-    total_error = np.linalg.norm(group_errors, ord=2)
+    avg_scalar_result, group_errors, total_error = flux_errors(
+        result.scalar, phi_mc, seed_resolution=10
+    )
     passed &= total_error < flux_tol
+    passed &= bool(np.all(group_errors < flux_tol))
 
     # Compute and plot z-score per energy group
-    zscores = np.abs(avg_scalar_result - phi_mc) / phi_mc_stdev
-    X, Y = np.meshgrid(
-        np.linspace(0, length, phi_mc.shape[1]),
-        np.linspace(0, length, phi_mc.shape[2]),
+    stats, plots = zscores(
+        avg_scalar_result,
+        phi_mc,
+        phi_mc_stdev,
+        extent=(0, length, 0, length),
+        prefix=f"fixed_source_{request.node.name}",
     )
-
-    stats = {
-        name: np.zeros(xs_server.num_groups)
-        for name in ["Minimum", "Q1", "Median", "Q2", "Maximum", "Mean"]
-    }
-
-    for g in range(xs_server.num_groups):
-        passed &= group_errors[g] < flux_tol
-
-        generated_plots.append(f"fixed_source_{request.node.name}_zscore_{g + 1}.png")
-
-        plt.clf()
-        ax = plt.gca()
-        cmesh = ax.pcolormesh(X, Y, zscores[g,], cmap="plasma")
-        divider = make_axes_locatable(ax)
-        cbar = plt.colorbar(
-            cmesh,
-            cax=divider.append_axes("right", size="5%", pad=0.05),
-        )
-        cbar.set_label(
-            r"$\frac{|\phi_"
-            + str(g + 1)
-            + r"^{\text{ttnte}} - \phi_"
-            + str(g + 1)
-            + r"^{\text{OpenMC}}|}{|\sigma_"
-            + str(g + 1)
-            + r"^{\text{OpenMC}}|}$",
-            size=14,
-        )
-        ax.set_aspect("equal")
-        ax.set_xlabel(r"$x$")
-        ax.set_ylabel(r"$y$")
-        plt.tight_layout()
-        plt.savefig(generated_plots[-1], dpi=300)
-
-    stats["Minimum"][0] = np.min(zscores)
-    stats["Q1"][0] = np.percentile(zscores, 25)
-    stats["Median"][0] = np.median(zscores)
-    stats["Q2"][0] = np.percentile(zscores, 75)
-    stats["Maximum"][0] = np.max(zscores)
-    stats["Mean"][0] = np.mean(zscores)
+    generated_plots += plots
 
     # ========================================================================
     # Attach data to Pytest for conftest.py to read
@@ -289,22 +192,17 @@ def test_infinite_square(request):
         "balance residual fraction": balance,
         "Total relative L2 error": total_error,
     }
-    for name, stat in stats.items():
-        errors[name] = stat[-1]
-
-    if mpi_context.rank == 0:
-        for name, error in errors.items():
-            print(f"{name}: {error}")
-
-    request.node.vnv_plots = generated_plots
-    request.node.vnv_metrics = {
-        "name": request.node.name,
-        "metric": "Leakage fraction",
-        "ttnte_val": leakage_frac,
-        "ref_val": leakage_frac_mc[0],
-        "passed": passed,
-        "detailed_errors": errors,
-    }
+    errors.update(stats)
+    record(
+        request,
+        result,
+        metric="Leakage fraction",
+        value=leakage_frac,
+        ref=leakage_frac_mc[0],
+        passed=passed,
+        errors=errors,
+        plots=generated_plots,
+    )
 
     # Finally, formally assert to fail the test if outside tolerance
     assert (

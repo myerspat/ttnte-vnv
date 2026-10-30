@@ -1,5 +1,3 @@
-import os
-
 from igakit import cad
 import pytest
 import torch
@@ -11,24 +9,38 @@ from ttnte.visualization.style import get_patch_style
 from ttnte.visualization.window import export_pv_plot
 from ttnte.cad import Patch
 from ttnte.mesh import IGAMesh
-from ttnte.physics import (
-    BoundaryType,
-    BCPlane,
-    DGTransportAssemblerConfig,
-)
+from ttnte.physics import BoundaryType, BCPlane
 from ttnte.math import ProductQuadrature
-from ttnte.driver import IGATransportDriver3D
-from ttnte.solvers import (
-    DDSolverConfig,
-    IGADDSolver,
-    MemoryPolicy,
-    AMEnSolver,
-    BlockJacobiStrategy,
-    ExecMode,
-    CommMode,
-)
-from ttnte.parallel import IGADofHeuristic
-from ttnte.linalg import AMEnNativeOptions, AMEnEnrichmentMode
+
+from vnv import record, setup
+
+# Solver settings for this problem, merged over vnv.solvers.DEFAULTS
+# (--solver-opt on the command line wins over these)
+OPTS = {
+    "amen": {
+        "tol": 1e-4,
+        "max_iter": 500,
+        "assembler": {"max_dense_size": 100000},
+        "dd": {"tol": 5e-5, "tol_forcing": 0.1, "max_iter": 100},
+        "local": {
+            "nswp": 10,
+            "eps": 1e-5,
+            "eps_forcing": 0.01,
+            "kickrank": 4,
+            "local_iterations": 200,
+            "resets": 4,
+            "max_rank": 500,
+        },
+        "native": {
+            "enrichment_mode": "FULL",
+            "als_residual_rank": 0,
+            "proximal_regularization": 0.01,
+            "gmres_mixed_precision": True,
+        },
+    },
+    "sweep": {"tol": 1e-5, "num_threads": 2},
+    "cross": {"tol": 1e-5, "num_threads": 2, "cross": {"num_threads": 2}},
+}
 
 
 def _octant_shell_ctrl(radius):
@@ -119,38 +131,16 @@ def create_hollow_octant_sphere(r_inner, r_outer):
 
 
 @pytest.mark.mpi(min_size=1)
-def test_reflected_sphere(request):
-    passed = True
-
+def test_reflected_sphere(request, solver):
     # ========================================================================
     # Setup
+    setup(max_ranks=2)
     dtype = torch.float64
     cpu = torch.device("cpu")
 
-    # Initialize MPI
-    mpi_context.init()
-    num_threads_per_rank = min(os.cpu_count() // mpi_context.world_size, 8)
-    torch.set_num_threads(num_threads_per_rank)
-
-    # Check MPI size
-    if mpi_context.world_size > 2:
-        pytest.skip("Test requires 2 or fewer processes")
-
-    # Check if there are GPUs and enough of them available
-    use_gpu = False
-    if (
-        torch.cuda.is_available()
-        and torch.cuda.device_count() >= mpi_context.world_size
-    ):
-        use_gpu = True
-
-    # Set defaults for PyTorch
-    torch.set_default_dtype(dtype)
-    torch.autograd.set_grad_enabled(False)
-
     # Create angular quadrature
     qset = ProductQuadrature.gauss_legendre_chebyshev(4, 4, 3)
-    qset.to_(torch.device("cpu"), dtype)
+    qset.to_(cpu, dtype)
 
     # Spatial fidelity
     numel = 4
@@ -237,65 +227,12 @@ def test_reflected_sphere(request):
         export_pv_plot(plotter[0], generated_plots[-1], style)
 
     # ========================================================================
-    # Create transport driver and distribute across MPI ranks
-    # Create the transport driver
-    driver = IGATransportDriver3D(mesh, xs_server, mpi_context)
-
-    # Distribute patches among MPI ranks
-    driver.distribute([IGADofHeuristic()])
-
-    # ========================================================================
-    # Assemble operators
-    config = DGTransportAssemblerConfig()
-    config.rounding.eps = 1e-8
-    config.cross.eps = config.rounding.eps
-    driver.assemble(qset, config)
-
-    # ========================================================================
-    # Run DD solver
-    outer_tol = 1e-4
-    inner_tol = 5e-5
-    eps = 1e-5
-
-    # Create Block-Jacobi DD strategy
-    config = DDSolverConfig(
-        tol=inner_tol,
-        tol_forcing=0.1,
-        max_iter=100,
-        use_gpu=use_gpu,
-        memory_policy=MemoryPolicy.RESIDENT,
-        exec_mode=ExecMode.ASYNC,
-        comm_mode=CommMode.ASYNC,
-        verbose=True,
-    )
-    strategy = BlockJacobiStrategy(config)
-    strategy.set_local_solver(
-        AMEnSolver(
-            nswp=10,
-            eps=eps,
-            eps_forcing=0.01,
-            kickrank=4,
-            local_iterations=200,
-            resets=4,
-            max_rank=500,
-            native_opts=AMEnNativeOptions(
-                enrichment_mode=AMEnEnrichmentMode.FULL,
-                als_residual_rank=0,
-                proximal_regularization=0.01,
-                gmres_mixed_precision=True,
-            ),
-        )
-    )
-    dd_solver = IGADDSolver(driver.mesh, strategy)
-
-    # Run DD eigenvalue solver
-    result = driver.solve_eigenvalue(
-        dd_solver, tol=outer_tol, max_iter=500, verbose=True
-    )
+    # Solve
+    result = solver.run(mesh, xs_server, qset, eigenvalue=True, opts=OPTS)
 
     # ========================================================================
     # Plot the solution
-    scalar_result = result.compute_scalar_flux()
+    scalar_result = result.scalar
 
     # Plot a 2-D slice of this geometry with a plane that is defined by the point
     # (0, 0, 1) and normal (0, 0, 1)
@@ -338,23 +275,19 @@ def test_reflected_sphere(request):
     # ========================================================================
     # Check the solution to the analytical
     keff_error = (result.k_eff - 1.0) * 1e5
-    passed &= abs(keff_error) < 5
+    passed = abs(keff_error) < 5
 
     # ========================================================================
     # Attach data to Pytest for conftest.py to read
-    errors = {"dk (pcm)": keff_error}
-    if mpi_context.rank == 0:
-        for name, error in errors.items():
-            print(f"{name}: {error}")
-
-    request.node.vnv_plots = generated_plots
-    request.node.vnv_metrics = {
-        "name": request.node.name,
-        "ttnte_k": result.k_eff,
-        "ref_k": 1.0,
-        "passed": passed,
-        "detailed_errors": errors,
-    }
+    record(
+        request,
+        result,
+        value=result.k_eff,
+        ref=1.0,
+        passed=passed,
+        errors={"dk (pcm)": keff_error},
+        plots=generated_plots,
+    )
 
     # Finally, formally assert to fail the test if outside tolerance
     assert (

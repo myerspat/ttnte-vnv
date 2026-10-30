@@ -1,48 +1,57 @@
-import os
 from pathlib import Path
 
 import pytest
 import torch
 import numpy as np
 from igakit import cad
-import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from ttnte import mpi_context
 from ttnte.cad import Patch
 from ttnte.mesh import IGAMesh
-from ttnte.physics import (
-    BoundaryType,
-    BCPlane,
-    DGTransportAssemblerConfig,
-)
+from ttnte.physics import BoundaryType, BCPlane
 from ttnte.math import ProductQuadrature
-from ttnte.linalg import Operator, TTEngine, mm
-from ttnte.driver import IGATransportDriver2D
-from ttnte.solvers import (
-    DDSolverConfig,
-    MemoryPolicy,
-    AMEnSolver,
-    BlockJacobiStrategy,
-    IGADDSolver,
-    ExecMode,
-    CommMode,
-    StaticFreezePolicy,
-)
 from ttnte.visualization.style import get_patch_style
-from ttnte.parallel import IGADofHeuristic
-from ttnte.linalg import AMEnNativeOptions, AMEnEnrichmentMode
 from ttnte.xs.benchmarks import c5g7
+
+from vnv import flux_errors, record, setup, zscores
+
+# Solver settings for this problem, merged over vnv.solvers.DEFAULTS
+# (--solver-opt on the command line wins over these)
+OPTS = {
+    "amen": {
+        "tol": 1e-6,
+        "k_tol": 1e-6,
+        "max_iter": 100,
+        "keep_assemblers": True,  # operator rank printout below
+        "dd": {"tol": 5e-7, "tol_forcing": 0.5, "max_iter": 100},
+        "local": {
+            "nswp": 1,
+            "eps": 1e-7,
+            "eps_forcing": 0.1,
+            "kickrank": 4,
+            "local_iterations": 250,
+            "resets": 4,
+            "max_rank": 2**31 - 1,
+        },
+        "native": {
+            "enrichment_mode": "FULL",
+            "als_residual_rank": 0,
+            "proximal_regularization": 0.01,
+            "gmres_mixed_precision": True,
+        },
+        "freeze_eps": 1e-4,
+    },
+    "sweep": {"tol": 1e-5, "num_threads": 2},
+    "cross": {"tol": 1e-5, "num_threads": 2, "cross": {"num_threads": 2}},
+}
 
 
 @pytest.mark.slow
 @pytest.mark.mpi(min_size=1)
-def test_c5g7_pincell_2d(request):
-    passed = True
-
+def test_c5g7_pincell_2d(request, solver):
     # ========================================================================
     # Setup
-    # Settings
+    setup(max_ranks=3)
     dtype = torch.float64
     cpu = torch.device("cpu")
     ref_dir = (
@@ -54,27 +63,6 @@ def test_c5g7_pincell_2d(request):
     assert (
         ref_dir.exists() and (ref_dir / "data").exists()
     ), f"Reference data directory not found at {ref_dir / 'data'}"
-
-    # Initialize MPI
-    mpi_context.init()
-    num_threads_per_rank = min(os.cpu_count() // mpi_context.world_size, 8)
-    torch.set_num_threads(num_threads_per_rank)
-
-    # Check MPI size
-    if mpi_context.world_size > 3:
-        pytest.skip("Test requires 3 or fewer processes")
-
-    # Check if there are GPUs and enough of them available
-    use_gpu = False
-    if (
-        torch.cuda.is_available()
-        and torch.cuda.device_count() >= mpi_context.world_size
-    ):
-        use_gpu = True
-
-    # Set defaults for PyTorch
-    torch.set_default_dtype(dtype)
-    torch.autograd.set_grad_enabled(False)
 
     # Create angular quadrature
     qset = ProductQuadrature.gauss_legendre_chebyshev(16, 16, 2)
@@ -155,98 +143,41 @@ def test_c5g7_pincell_2d(request):
     )
 
     # ========================================================================
-    # Create transport driver and distribute across MPI ranks
-    # Create the transport driver
-    driver = IGATransportDriver2D(mesh, xs_server, mpi_context)
+    # Solve
+    result = solver.run(mesh, xs_server, qset, eigenvalue=True, opts=OPTS)
 
-    # Distribute patches among MPI ranks
-    driver.distribute([IGADofHeuristic()])
+    # Operator ranks and compression of this rank's patches (TT operators only)
+    if solver.name == "amen":
+        for patch in result.driver.mesh.blocks:
+            assembler = result.driver.get_assembler(patch.gid)
 
-    # ========================================================================
-    # Assemble operators
-    config = DGTransportAssemblerConfig()
-    config.rounding.eps = 1e-8
-    config.cross.eps = config.rounding.eps
-    config.max_dense_size = int(1e10)
-    config.cross_jacobian_inverse = False
-    driver.assemble(qset, config)
+            string = f"GID: {patch.gid}\n"
 
-    for patch in mesh.blocks:
-        assembler = driver.get_assembler(patch.gid)
+            op = assembler.interior_loss_op.as_tt()
+            string += f"H: Ranks = {op.ranks}, CR = {op.compression}\n"
+            op = assembler.scatter_op.as_tt()
+            string += f"S: Ranks = {op.ranks}, CR = {op.compression}\n"
 
-        string = f"GID: {patch.gid}\n"
+            if assembler.fission_op.defined():
+                op = assembler.fission_op.as_tt()
+                string += f"F: Ranks = {op.ranks}, CR = {op.compression}\n"
 
-        op = assembler.interior_loss_op.as_tt()
-        string += f"H: Ranks = {op.ranks}, CR = {op.compression}\n"
-        op = assembler.scatter_op.as_tt()
-        string += f"S: Ranks = {op.ranks}, CR = {op.compression}\n"
+            for op in assembler.inflow_ops:
+                op = op.as_tt()
+                string += f"Bin: Ranks = {op.ranks}, CR = {op.compression}\n"
+            for op in assembler.outflow_ops:
+                op = op.as_tt()
+                string += f"Bout: Ranks = {op.ranks}, CR = {op.compression}\n"
 
-        if assembler.fission_op.defined():
-            op = assembler.fission_op.as_tt()
-            string += f"F: Ranks = {op.ranks}, CR = {op.compression}\n"
-
-        for op in assembler.inflow_ops:
-            op = op.as_tt()
-            string += f"Bin: Ranks = {op.ranks}, CR = {op.compression}\n"
-        for op in assembler.outflow_ops:
-            op = op.as_tt()
-            string += f"Bout: Ranks = {op.ranks}, CR = {op.compression}\n"
-
-        print(string, end="")
-
-    # ========================================================================
-    # Run DD solver
-    outer_tol = 1e-6
-    inner_tol = 5e-7
-    eps = 1e-7
-
-    # Local solver
-    local_solver = AMEnSolver(
-        nswp=1,
-        eps=eps,
-        eps_forcing=0.1,
-        kickrank=4,
-        local_iterations=250,
-        resets=4,
-        native_opts=AMEnNativeOptions(
-            enrichment_mode=AMEnEnrichmentMode.FULL,
-            als_residual_rank=0,
-            proximal_regularization=0.01,
-            gmres_mixed_precision=True,
-        ),
-        enrichment_policy=StaticFreezePolicy(freeze_eps=1e-4),
-    )
-
-    # Create Block-Jacobi DD strategy
-    config = DDSolverConfig(
-        tol=inner_tol,
-        tol_forcing=0.5,
-        max_iter=100,
-        use_gpu=use_gpu,
-        memory_policy=MemoryPolicy.RESIDENT,
-        exec_mode=ExecMode.ASYNC,
-        comm_mode=CommMode.ASYNC,
-        verbose=True,
-    )
-    strategy = BlockJacobiStrategy(config)
-    strategy.set_local_solver(local_solver)
-    dd_solver = IGADDSolver(driver.mesh, strategy)
-
-    # Run power iteration + DD solver
-    result = driver.solve_eigenvalue(
-        dd_solver, tol=outer_tol, k_tol=1e-6, max_iter=100, verbose=True
-    )
+            print(string, end="")
 
     # ========================================================================
     # Plot the solution
-    # Compute the scalar flux
-    scalar_result = result.compute_scalar_flux()
-
     for g in range(xs_server.num_groups):
         generated_plots.append(f"{request.node.name}_flux_{g + 1}.png")
         mesh.plot(
             resolution=25,
-            solution=scalar_result.select_group(g),
+            solution=result.scalar.select_group(g),
             filename=generated_plots[-1],
             field_label=rf"$\phi_{g + 1}$",
             gather=True,
@@ -254,7 +185,7 @@ def test_c5g7_pincell_2d(request):
 
     # ========================================================================
     # Load OpenMC solution and compare
-    k_mc = [1.325593, 0.000032]
+    k_mc = [1.325593334007463, 3.229591167123522e-05]
 
     # Load OpenMC scalar flux data
     data_dir = ref_dir / "data"
@@ -269,82 +200,24 @@ def test_c5g7_pincell_2d(request):
     keff_error = (result.k_eff - k_mc[0]) * 1e5
     passed = abs(keff_error) < 100.0
 
-    # Average the NURBS solution onto a global regular mesh
-    avg_scalar_result = (
-        scalar_result.regular_mesh_average([phi_mc.shape[1], phi_mc.shape[2]], [5, 5])
-        .moveaxis(-1, 0)
-        .cpu()
-        .numpy()
-    )
+    # Average the NURBS solution onto a global regular mesh, normalize it and
+    # compare
     flux_tol = 0.04
-
-    # Normalize the average scalar flux
-    avg_scalar_result /= np.linalg.norm(avg_scalar_result.flatten(), ord=2)
-
-    # Get the relative L2-errors between ttnte and OpenMC
-    group_errors = np.linalg.norm(
-        (avg_scalar_result - phi_mc).reshape(xs_server.num_groups, -1), axis=1, ord=2
-    ) / np.linalg.norm(phi_mc.reshape(xs_server.num_groups, -1), axis=1, ord=2)
-
-    # Get total error
-    total_error = np.linalg.norm(group_errors, ord=2)
+    avg_scalar_result, group_errors, total_error = flux_errors(
+        result.scalar, phi_mc, normalize=True
+    )
     passed &= total_error < flux_tol
+    passed &= bool(np.all(group_errors < flux_tol))
 
     # Compute and plot z-score per energy group
-    zscores = np.abs(avg_scalar_result - phi_mc) / phi_mc_stdev
-    X, Y = np.meshgrid(
-        np.linspace(0, pitch / 2, phi_mc.shape[1]),
-        np.linspace(0, pitch / 2, phi_mc.shape[2]),
+    stats, plots = zscores(
+        avg_scalar_result,
+        phi_mc,
+        phi_mc_stdev,
+        extent=(0, pitch / 2, 0, pitch / 2),
+        prefix=request.node.name,
     )
-
-    stats = {
-        name: np.zeros(xs_server.num_groups + 1)
-        for name in ["Minimum", "Q1", "Median", "Q2", "Maximum", "Mean"]
-    }
-
-    for g in range(xs_server.num_groups):
-        passed &= group_errors[g] < flux_tol
-
-        generated_plots.append(f"{request.node.name}_zscore_{g + 1}.png")
-
-        plt.clf()
-        ax = plt.gca()
-        cmesh = ax.pcolormesh(X, Y, zscores[g,], cmap="plasma")
-        divider = make_axes_locatable(ax)
-        cbar = plt.colorbar(
-            cmesh,
-            cax=divider.append_axes("right", size="5%", pad=0.05),
-        )
-        cbar.set_label(
-            r"$\frac{|\phi_"
-            + str(g + 1)
-            + r"^{\text{ttnte}} - \phi_"
-            + str(g + 1)
-            + r"^{\text{OpenMC}}|}{|\sigma_"
-            + str(g + 1)
-            + r"^{\text{OpenMC}}|}$",
-            size=14,
-        )
-        ax.set_aspect("equal")
-        ax.set_xlabel(r"$x$")
-        ax.set_ylabel(r"$y$")
-        plt.tight_layout()
-        plt.savefig(generated_plots[-1], dpi=300)
-
-        # Get some stats
-        stats["Minimum"][g] = np.min(zscores[g,])
-        stats["Q1"][g] = np.percentile(zscores[g,], 25)
-        stats["Median"][g] = np.median(zscores[g,])
-        stats["Q2"][g] = np.percentile(zscores[g,], 75)
-        stats["Maximum"][g] = np.max(zscores[g,])
-        stats["Mean"][g] = np.mean(zscores[g,])
-
-    stats["Minimum"][-1] = np.min(zscores)
-    stats["Q1"][-1] = np.percentile(zscores, 25)
-    stats["Median"][-1] = np.median(zscores)
-    stats["Q2"][-1] = np.percentile(zscores, 75)
-    stats["Maximum"][-1] = np.max(zscores)
-    stats["Mean"][-1] = np.mean(zscores)
+    generated_plots += plots
 
     # ========================================================================
     # Attach data to Pytest for conftest.py to read
@@ -355,23 +228,16 @@ def test_c5g7_pincell_2d(request):
     }
     for g in range(xs_server.num_groups):
         errors[f"Relative relative L2 error (g = {g + 1})"] = group_errors[g]
-    for name, stat in stats.items():
-        for g in range(xs_server.num_groups):
-            errors[f"{name} ({g + 1})"] = stat[g]
-        errors[name] = stat[-1]
-
-    if mpi_context.rank == 0:
-        for name, error in errors.items():
-            print(f"{name}: {error}")
-
-    request.node.vnv_plots = generated_plots
-    request.node.vnv_metrics = {
-        "name": request.node.name,
-        "ttnte_k": result.k_eff,
-        "ref_k": k_mc[0],
-        "passed": passed,
-        "detailed_errors": errors,
-    }
+    errors.update(stats)
+    record(
+        request,
+        result,
+        value=result.k_eff,
+        ref=k_mc[0],
+        passed=passed,
+        errors=errors,
+        plots=generated_plots,
+    )
 
     # Finally, formally assert to fail the test if outside tolerance
     assert (

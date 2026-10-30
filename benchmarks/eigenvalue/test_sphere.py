@@ -1,5 +1,3 @@
-import os
-
 from igakit import cad
 import pytest
 import torch
@@ -12,25 +10,37 @@ from ttnte.visualization.style import get_patch_style
 from ttnte.visualization.window import export_pv_plot
 from ttnte.cad import Patch
 from ttnte.mesh import IGAMesh
-from ttnte.physics import (
-    BoundaryType,
-    BCPlane,
-    DGTransportAssemblerConfig,
-)
+from ttnte.physics import BoundaryType, BCPlane
 from ttnte.math import ProductQuadrature
-from ttnte.driver import IGATransportDriver3D
-from ttnte.solvers import (
-    DDSolverConfig,
-    IGADDSolver,
-    MemoryPolicy,
-    AMEnSolver,
-    StaticFreezePolicy,
-    BlockJacobiStrategy,
-    ExecMode,
-    CommMode,
-)
-from ttnte.parallel import IGADofHeuristic
-from ttnte.linalg import AMEnNativeOptions, AMEnEnrichmentMode
+
+from vnv import record, setup
+
+# Solver settings for this problem, merged over vnv.solvers.DEFAULTS
+# (--solver-opt on the command line wins over these)
+OPTS = {
+    "amen": {
+        "tol": 1e-6,
+        "max_iter": 500,
+        "local": {
+            "nswp": 4,
+            "eps": 1e-7,
+            "eps_forcing": 0.1,
+            "kickrank": 4,
+            "local_iterations": 100,
+            "resets": 4,
+            "max_rank": 500,
+        },
+        "native": {
+            "enrichment_mode": "FULL",
+            "als_residual_rank": 0,
+            "proximal_regularization": 0.1,
+            "gmres_mixed_precision": True,
+        },
+        "freeze_eps": 5e-5,
+    },
+    "sweep": {"tol": 1e-5, "num_threads": 2},
+    "cross": {"tol": 1e-5, "num_threads": 2, "cross": {"num_threads": 2}},
+}
 
 
 def _octant_shell_ctrl(radius):
@@ -277,30 +287,17 @@ def relative_l2_error_shell(elev, az, flux, expected):
     return np.sqrt(numerator / denominator)
 
 
-def test_sphere(request):
-    passed = True
-
+@pytest.mark.mpi(min_size=1)
+def test_sphere(request, solver):
     # ========================================================================
     # Setup
+    setup(max_ranks=1)
     dtype = torch.float64
     cpu = torch.device("cpu")
 
-    # Initialize MPI
-    mpi_context.init()
-    num_threads_per_rank = min(os.cpu_count() // mpi_context.world_size, 8)
-    torch.set_num_threads(num_threads_per_rank)
-
-    # Check MPI size
-    if mpi_context.world_size > 1:
-        pytest.skip("Test requires 1 or fewer processes")
-
-    # Set defaults for PyTorch
-    torch.set_default_dtype(dtype)
-    torch.autograd.set_grad_enabled(False)
-
     # Create angular quadrature
     qset = ProductQuadrature.gauss_legendre_chebyshev(4, 4, 3)
-    qset.to_(torch.device("cpu"), dtype)
+    qset.to_(cpu, dtype)
 
     # Spatial fidelity
     numel = 6
@@ -372,59 +369,12 @@ def test_sphere(request):
     export_pv_plot(plotter[0], generated_plots[-1], style)
 
     # ========================================================================
-    # Create transport driver and distribute across MPI ranks
-    # Create the transport driver
-    driver = IGATransportDriver3D(mesh, xs_server, mpi_context)
-
-    # Distribute patches among MPI ranks
-    driver.distribute([IGADofHeuristic()])
-
-    # ========================================================================
-    # Assemble operators
-    config = DGTransportAssemblerConfig()
-    config.rounding.eps = 1e-8
-    config.cross.eps = config.rounding.eps
-    config.max_dense_size = int(1e10)
-    config.cross_jacobian_inverse = False
-    driver.assemble(qset, config)
-
-    # ========================================================================
-    # Run DD solver
-    # Send the lone system to the GPU
-    if torch.cuda.is_available():
-        sys = driver.get_system(v0.gid)
-        sys.to_(torch.device("cuda"))
-
-    result = driver.solve_eigenvalue(
-        AMEnSolver(
-            nswp=4,
-            eps=1e-7,
-            eps_forcing=0.1,
-            kickrank=4,
-            local_iterations=100,
-            resets=4,
-            max_rank=500,
-            native_opts=AMEnNativeOptions(
-                enrichment_mode=AMEnEnrichmentMode.FULL,
-                als_residual_rank=0,
-                proximal_regularization=0.1,
-                gmres_mixed_precision=True,
-            ),
-            enrichment_policy=StaticFreezePolicy(freeze_eps=5e-5),
-        ),
-        tol=1e-6,
-        max_iter=500,
-        verbose=True,
-    )
-
-    # Remove the lone system from the GPU
-    if torch.cuda.is_available():
-        sys = driver.get_system(v0.gid)
-        sys.to_(cpu)
+    # Solve
+    result = solver.run(mesh, xs_server, qset, eigenvalue=True, opts=OPTS)
 
     # ========================================================================
     # Plot the solution
-    scalar_result = result.compute_scalar_flux()
+    scalar_result = result.scalar
 
     # Plot a 2-D slice of this geometry with a plane that is defined by the point
     # (0, 0, 1) and normal (0, 0, 1)
@@ -460,7 +410,7 @@ def test_sphere(request):
     # ========================================================================
     # Check the solution to the analytical
     keff_error = (result.k_eff - 1.0) * 1e5
-    passed &= abs(keff_error) < 10
+    passed = abs(keff_error) < 10
 
     # Check the scalar flux at four radii against the analytic (normalized by
     # the center flux) bare-critical-sphere solution -- constant over each
@@ -499,19 +449,15 @@ def test_sphere(request):
 
     # ========================================================================
     # Attach data to Pytest for conftest.py to read
-    errors = {"dk (pcm)": keff_error, **flux_errors}
-    if mpi_context.rank == 0:
-        for name, error in errors.items():
-            print(f"{name}: {error}")
-
-    request.node.vnv_plots = generated_plots
-    request.node.vnv_metrics = {
-        "name": request.node.name,
-        "ttnte_k": result.k_eff,
-        "ref_k": 1.0,
-        "passed": passed,
-        "detailed_errors": errors,
-    }
+    record(
+        request,
+        result,
+        value=result.k_eff,
+        ref=1.0,
+        passed=passed,
+        errors={"dk (pcm)": keff_error, **flux_errors},
+        plots=generated_plots,
+    )
 
     # Finally, formally assert to fail the test if outside tolerance
     assert (

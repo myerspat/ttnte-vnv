@@ -74,11 +74,15 @@ jobs:
         run: |
           make install VERBOSE=ON USE_CUDA=OFF JOBS=$(nproc)
 
-      - name: Run V&V suite (no MPI)
+      # Every benchmark, slow ones included, with the sweep and cross solvers.
+      # --with-mpi is needed even on one rank: pytest-mpi skips mpi-marked tests
+      # without it. --bind-to none: Open MPI otherwise pins each rank to one
+      # core, starving the solver threads
+      - name: Run V&V suite (1 MPI rank, sweep and cross)
         run: |
-          xvfb-run -a pytest benchmarks --vnv-label "No MPI" --html=report_no_mpi.html --self-contained-html --import-mode=importlib
+          xvfb-run -a mpirun -n 1 --bind-to none pytest --with-mpi benchmarks --vnv-label "1 MPI Rank (sweep, cross)" --solvers sweep,cross --html=report_no_mpi.html --self-contained-html --import-mode=importlib
 
-      - name: Upload V&V report (no MPI)
+      - name: Upload V&V report (1 MPI rank, sweep and cross)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -88,9 +92,26 @@ jobs:
             *.png
           retention-days: 90
 
+      # Non-slow benchmarks with AMEn (the slow problems need a GPU to finish in
+      # time)
+      - name: Run V&V suite (1 MPI rank, amen)
+        run: |
+          xvfb-run -a mpirun -n 1 --bind-to none pytest --with-mpi benchmarks --vnv-label "1 MPI Rank (amen)" --limited --solvers amen --html=report_amen.html --self-contained-html --import-mode=importlib
+
+      - name: Upload V&V report (1 MPI rank, amen)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vnv-report-amen
+          path: |
+            report_amen.html
+            *.png
+          retention-days: 90
+
+      # Cross transport solves are serial in space for now: amen and sweep only
       - name: Run V&V suite (2 MPI ranks)
         run: |
-          xvfb-run -a mpirun -n 2 pytest --with-mpi benchmarks --vnv-label "2 MPI Ranks" --limited --html=report_mpi.html --self-contained-html --import-mode=importlib
+          xvfb-run -a mpirun -n 2 --bind-to none pytest --with-mpi benchmarks --vnv-label "2 MPI Ranks" --limited --solvers amen,sweep --html=report_mpi.html --self-contained-html --import-mode=importlib
 
       - name: Upload V&V report (2 MPI ranks)
         if: always()
