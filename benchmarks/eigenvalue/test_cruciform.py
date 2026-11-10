@@ -42,7 +42,7 @@ OPTS = {
         "freeze_eps": 1e-5,
     },
     "sweep": {"tol": 1e-5, "num_threads": 2},
-    "cross": {"tol": 1e-5, "num_threads": 2, "cross": {"num_threads": 2}},
+    "cross": {"tol": 1e-5, "num_threads": 2, "cross_threads": 2},
 }
 
 # OpenMC reference k-eigenvalue [mean, stdev] per displacer material

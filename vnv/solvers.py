@@ -34,8 +34,8 @@ Settings of the ``amen`` solver:
 Settings of the ``sweep`` and ``cross`` solvers:
 
 - ``k_tol``: passed to ``solve_eigenvalue()``
-- every other key: a ``SweepConfig`` attribute (``num_threads: None`` uses
-  ``torch.get_num_threads()``)
+- every other key: a ``SweepConfig`` attribute (``num_threads`` and
+  ``cross_threads`` ``None`` use ``torch.get_num_threads()``)
 - ``cross``: ``CrossConfig`` attributes
 
 Enum-valued settings accept the member name as a string (e.g.
@@ -114,7 +114,7 @@ DEFAULTS = {
         "num_threads": None,
         "verbose": True,
         "transport": "CROSS",
-        "cross": {"num_threads": None},
+        "cross_threads": None,
     },
 }
 
@@ -385,12 +385,10 @@ def _run_sweep(name, mesh, xs_server, qset, num_dim, eigenvalue, balance, s):
 
     config = SweepConfig()
     for key, value in s.items():
-        if key == "num_threads" and value is None:
+        if key in ("num_threads", "cross_threads") and value is None:
             value = torch.get_num_threads()
         _set(config, key, value, name)
     for key, value in cross.items():
-        if key == "num_threads" and value is None:
-            value = torch.get_num_threads()
         _set(config.cross, key, value, f"{name}.cross")
     if balance:
         config.store_angular_flux = True

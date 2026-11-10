@@ -39,7 +39,7 @@ OPTS = {
         },
     },
     "sweep": {"tol": 1e-5, "num_threads": 2},
-    "cross": {"tol": 1e-5, "num_threads": 2, "cross": {"num_threads": 2}},
+    "cross": {"tol": 1e-5, "num_threads": 2, "cross_threads": 2},
 }
 
 
