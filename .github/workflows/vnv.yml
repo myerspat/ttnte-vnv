@@ -74,13 +74,12 @@ jobs:
         run: |
           make install VERBOSE=ON USE_CUDA=OFF JOBS=$(nproc)
 
-      # Every benchmark, slow ones included, with the sweep and cross solvers.
-      # --with-mpi is needed even on one rank: pytest-mpi skips mpi-marked tests
-      # without it. --bind-to none: Open MPI otherwise pins each rank to one
-      # core, starving the solver threads
+      # The non-slow benchmarks with every solver, through the Makefile (see its
+      # header for the mpirun/pytest flags). XVFB is set explicitly so a missing
+      # xvfb-run fails the step instead of running without a display
       - name: Run V&V suite (1 MPI rank)
         run: |
-          xvfb-run -a mpirun -n 1 --bind-to none pytest --with-mpi benchmarks --vnv-label "1 MPI Rank" --limited --html=report_no_mpi.html --self-contained-html --import-mode=importlib
+          make limited XVFB="xvfb-run -a"
 
       - name: Upload V&V report (1 MPI rank)
         if: always()
@@ -92,10 +91,11 @@ jobs:
             *.png
           retention-days: 90
 
-      # Cross transport solves are serial in space for now: amen and sweep only
+      # Cross transport solves are serial in space for now: the Makefile's
+      # MPI_SOLVERS default is amen and sweep only
       - name: Run V&V suite (2 MPI ranks)
         run: |
-          xvfb-run -a mpirun -n 2 --bind-to none pytest --with-mpi benchmarks --vnv-label "2 MPI Ranks" --limited --solvers amen,sweep --html=report_mpi.html --self-contained-html --import-mode=importlib
+          make limited-mpi NP=2 XVFB="xvfb-run -a"
 
       - name: Upload V&V report (2 MPI ranks)
         if: always()

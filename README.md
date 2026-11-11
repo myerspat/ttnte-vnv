@@ -6,6 +6,24 @@ Verification and validation benchmarks for ttnte. Every benchmark that takes a
 
 ## Running
 
+The Makefile wraps the runs CI does (`make help` lists everything):
+
+```shell
+make limited                  # non-slow benchmarks, 1 MPI rank, all solvers
+make full                     # every benchmark, 1 MPI rank
+make limited-mpi NP=4         # non-slow benchmarks on 4 ranks (amen, sweep)
+make full-mpi                 # every benchmark on NP ranks (default 2)
+make limited-all              # limited, then limited-mpi: what CI runs
+make limited SOLVERS=sweep,cross OPTS="cross.cross.tol=1e-5 tol=1e-7"
+make full ARGS='-k "slab and cross"'
+make clean                    # remove the reports and plots
+```
+
+Every target runs under `mpirun --with-mpi`, even on one rank, since pytest-mpi
+skips the mpi-marked benchmarks otherwise. The multi-rank targets leave `cross`
+out by default (`MPI_SOLVERS`): cross transport solves are serial in space for
+now. Or call pytest directly:
+
 ```shell
 pytest benchmarks --limited                      # all non-slow benchmarks, all solvers
 pytest benchmarks --solvers sweep,cross          # pick solvers
