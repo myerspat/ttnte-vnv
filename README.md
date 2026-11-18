@@ -2,7 +2,16 @@
 
 Verification and validation benchmarks for ttnte. Every benchmark that takes a
 `solver` argument runs once per solver: `amen` (block-Jacobi DD + AMEn), `sweep`
-(exact transport sweeper) and `cross` (sweeper with cross transport solves).
+(exact transport sweeper), `cross` (sweeper with cross transport solves) and
+`galerkin` (sweeper with greedy Galerkin transport solves, Guo & Peng, under
+GMRES as in Han et al.'s LR-FGMRES).
+
+A solver can also run as a preset, `<solver>:<preset>`: the solver with named
+settings merged over its own (`PRESETS` in `vnv/solvers.py`; a test's settings for
+the solver apply to its presets too). `galerkin:deim` is `galerkin` under source
+iteration with Han et al.'s DEIM stage at their settings. There is no DSA, so it
+can diverge where strong scattering needs it; such a run fails with a
+`RuntimeError` naming the DEIM source iteration.
 
 ## Running
 
@@ -21,15 +30,17 @@ make clean                    # remove the reports and plots
 
 Every target runs under `mpirun --with-mpi`, even on one rank, since pytest-mpi
 skips the mpi-marked benchmarks otherwise. The multi-rank targets leave `cross`
-out by default (`MPI_SOLVERS`): cross transport solves are serial in space for
-now. Or call pytest directly:
+and `galerkin` out by default (`MPI_SOLVERS`): sampled transport solves are
+serial in space for now. Or call pytest directly:
 
 ```shell
 pytest benchmarks --limited                      # all non-slow benchmarks, all solvers
 pytest benchmarks --solvers sweep,cross          # pick solvers
+pytest benchmarks --solvers galerkin,galerkin:deim  # a solver and its preset
 pytest benchmarks -k "slab and cross"            # or select test ids directly
 pytest benchmarks --solver-opt amen.local.eps=1e-6 --solver-opt cross.cross.tol=1e-5
 pytest benchmarks --solver-opt tol=1e-7          # no solver prefix: every solver
+pytest benchmarks --solver-opt galerkin:deim.galerkin.deim.switch_tol=1e-5  # a preset only
 ```
 
 `--solver-opt [SOLVER.]KEY[.SUBKEY]=VALUE` overrides a solver setting and wins

@@ -4,7 +4,7 @@ import sys
 import pytest
 from pytest_html import extras
 from ttnte import mpi_context  # <-- Import your MPI context!
-from vnv.solvers import SOLVERS, Solver, parse_overrides
+from vnv.solvers import NAMES, SOLVERS, Solver, base_solver, parse_overrides
 
 VNV_RESULTS = []
 VNV_LABEL = ""
@@ -17,15 +17,15 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "solvers(*names): run this test only with these solvers "
-        f"(of {', '.join(SOLVERS)})",
+        f"(of {', '.join(SOLVERS)}; a solver's presets follow it)",
     )
 
     # Validate the solver selection and overrides before collecting anything
     solvers = [name.strip() for name in config.getoption("--solvers").split(",")]
-    unknown = [name for name in solvers if name not in SOLVERS]
+    unknown = [name for name in solvers if name not in NAMES]
     if unknown:
         _usage_error(
-            f"--solvers: unknown solver(s) {unknown}, expected some of {SOLVERS}"
+            f"--solvers: unknown solver(s) {unknown}, expected some of {NAMES}"
         )
     config.vnv_solvers = solvers
     try:
@@ -48,7 +48,11 @@ def pytest_generate_tests(metafunc):
     names = metafunc.config.vnv_solvers
     marker = metafunc.definition.get_closest_marker("solvers")
     if marker is not None:
-        names = [name for name in names if name in marker.args]
+        names = [
+            name
+            for name in names
+            if name in marker.args or base_solver(name) in marker.args
+        ]
     metafunc.parametrize(
         "solver",
         [Solver(name, metafunc.config.vnv_overrides) for name in names],
@@ -168,8 +172,8 @@ def pytest_addoption(parser):
         "--solvers",
         action="store",
         default=",".join(SOLVERS),
-        help="Comma-separated solvers to run every benchmark with "
-        f"(default: {','.join(SOLVERS)})",
+        help="Comma-separated solvers or presets to run every benchmark with "
+        f"(of {','.join(NAMES)}; default: {','.join(SOLVERS)})",
     )
     parser.addoption(
         "--solver-opt",

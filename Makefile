@@ -14,9 +14,11 @@
 
 # MPI ranks of the *-mpi targets
 NP ?= 2
-# Solvers of the 1-rank and multi-rank targets. Cross transport solves are
-# serial in space for now, so the multi-rank runs leave cross out
-SOLVERS ?= amen,sweep,cross
+# Solvers (and presets, <solver>:<preset>) of the 1-rank and multi-rank
+# targets. Sampled transport solves (cross, galerkin) are serial in space for
+# now, so the multi-rank runs leave them out. galerkin:deim (Han et al.'s DEIM
+# stage, no DSA) can diverge on strongly scattering problems
+SOLVERS ?= amen,sweep,cross,galerkin,galerkin:deim
 MPI_SOLVERS ?= amen,sweep
 # Space-separated --solver-opt overrides, [SOLVER.]KEY=VALUE each
 OPTS ?=

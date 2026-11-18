@@ -1,17 +1,33 @@
-"""Run a benchmark problem with any of ttnte's three transport solvers.
+"""Run a benchmark problem with any of ttnte's transport solvers.
 
 - ``amen``: block-Jacobi domain decomposition with the AMEn local solver
   (``IGATransportDriver`` + ``IGADDSolver``)
 - ``sweep``: the exact transport sweeper (``IGASweepDriver``, ``TransportSolve.EXACT``)
 - ``cross``: the sweeper with low-rank cross transport solves
   (``TransportSolve.CROSS``)
+- ``galerkin``: the sweeper with greedy Galerkin transport solves (Guo & Peng's
+  residual-greedy direction sampling, ``TransportSolve.GALERKIN``), under GMRES
+  (Han et al.'s LR-FGMRES) with our sampled-solve tolerance control
+
+Presets (``PRESETS``) are named settings of one of these solvers, run as
+``<solver>:<preset>``:
+
+- ``galerkin:deim``: ``galerkin`` under source iteration with Han et al.'s DEIM
+  stage at their settings (switch 1e-4, inner test 1e-6, the iterate kept as the
+  interpolant, no update on growth). No DSA: it can diverge where strong
+  scattering needs it (a ``RuntimeError`` naming the DEIM source iteration).
 
 Every solver is configured by a nested dict of settings. They are layered, later
 layers winning:
 
 1. ``DEFAULTS[name]`` below,
 2. the ``opts`` a test passes to ``run()`` (``{"amen": {...}, "cross": {...}}``),
-3. ``--solver-opt`` on the pytest command line (see ``parse_overrides``).
+3. for a preset, ``PRESETS[preset]``, then ``opts[preset]``,
+4. ``--solver-opt`` on the pytest command line (see ``parse_overrides``): the
+   solver's, then the preset's.
+
+A preset thus inherits a test's solver settings (tolerances, threads), and the
+command line still wins over it.
 
 Settings of the ``amen`` solver:
 
@@ -31,12 +47,19 @@ Settings of the ``amen`` solver:
 - ``keep_assemblers``: keep the assemblers after the solve (as ``balance=True``
   does) for diagnostics through ``result.driver.get_assembler(gid)``
 
-Settings of the ``sweep`` and ``cross`` solvers:
+Settings of the ``sweep``, ``cross`` and ``galerkin`` solvers:
 
 - ``k_tol``: passed to ``solve_eigenvalue()``
 - every other key: a ``SweepConfig`` attribute (``num_threads`` and
-  ``cross_threads`` ``None`` use ``torch.get_num_threads()``)
+  ``sampling_threads`` ``None`` use ``torch.get_num_threads()``)
 - ``cross``: ``CrossConfig`` attributes
+- ``galerkin``: ``GalerkinConfig`` attributes (e.g. ``per_iter``, ``candidates``,
+  ``seed``; Guo & Peng weight every direction equally, which needs
+  ``weighting=Weighting(angle=False)`` from Python). Nested settings are dicts,
+  e.g. Han et al.'s DEIM stage (source iteration only):
+  ``{"inner_solver": "RICHARDSON", "galerkin": {"deim": {"enabled": True,
+  "switch_tol": 1e-4}}}``; with ``"sample": "PAIR"`` it works over (direction,
+  group) pairs (ours).
 
 Enum-valued settings accept the member name as a string (e.g.
 ``"memory_policy": "OUT_OF_CORE"``).
@@ -72,7 +95,31 @@ from ttnte.sweep import (
     SweepConfig,
 )
 
-SOLVERS = ("amen", "sweep", "cross")
+SOLVERS = ("amen", "sweep", "cross", "galerkin")
+
+# Named settings of a solver, run as "<solver>:<preset>" (see the module doc)
+PRESETS = {
+    "galerkin:deim": {
+        "inner_solver": "RICHARDSON",
+        "galerkin": {
+            "deim": {
+                "enabled": True,
+                "switch_tol": 1e-4,
+                "inner_tol": 1e-6,
+                "galerkin_flux": False,
+                "update_on_growth": False,
+            }
+        },
+    },
+}
+# Everything --solvers accepts
+NAMES = SOLVERS + tuple(PRESETS)
+
+
+def base_solver(name: str) -> str:
+    """The solver a solver or preset name runs (``galerkin:deim`` -> ``galerkin``)."""
+    return name.split(":", 1)[0]
+
 
 DEFAULTS = {
     "amen": {
@@ -114,7 +161,16 @@ DEFAULTS = {
         "num_threads": None,
         "verbose": True,
         "transport": "CROSS",
-        "cross_threads": None,
+        "sampling_threads": None,
+    },
+    "galerkin": {
+        "k_tol": 1e-6,
+        "tol": 1e-6,
+        "max_iter": 1000,
+        "num_threads": None,
+        "verbose": True,
+        "transport": "GALERKIN",
+        "sampling_threads": None,
     },
 }
 
@@ -154,11 +210,12 @@ def _parse_value(raw: str) -> Any:
 def parse_overrides(items) -> dict:
     """Parse ``[SOLVER.]KEY[.SUBKEY...]=VALUE`` strings into per-solver settings.
 
-    ``amen.local.eps=1e-6`` sets one solver's setting; a path that does not start
-    with a solver name (``tol=1e-5``) is set for every solver. Values are Python
-    literals, or plain strings (enum member names, cross layouts).
+    ``amen.local.eps=1e-6`` sets one solver's setting (and its presets');
+    ``galerkin:deim.tol=1e-5`` one preset's; a path that does not start with a
+    solver or preset name (``tol=1e-5``) is set for every solver. Values are
+    Python literals, or plain strings (enum member names, cross layouts).
     """
-    out = {name: {} for name in SOLVERS}
+    out = {name: {} for name in NAMES}
     for item in items:
         path, sep, raw = item.partition("=")
         keys = path.strip().split(".")
@@ -166,7 +223,7 @@ def parse_overrides(items) -> dict:
             raise ValueError(
                 f"--solver-opt '{item}' is not of the form [SOLVER.]KEY=VALUE"
             )
-        if len(keys) > 1 and keys[0] in SOLVERS:
+        if len(keys) > 1 and keys[0] in NAMES:
             targets, keys = [keys[0]], keys[1:]
         else:
             targets = SOLVERS
@@ -180,10 +237,16 @@ def parse_overrides(items) -> dict:
 
 
 def _set(obj, key: str, value, where: str):
-    """``setattr`` with a clear error for unknown keys and enum names as strings."""
+    """``setattr`` with a clear error for unknown keys, enum names as strings, and a
+    dict for a nested settings object (set key by key)."""
     if not hasattr(obj, key):
         raise KeyError(f"{where} has no setting '{key}'")
     current = getattr(obj, key)
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _set(current, k, v, f"{where}.{key}")
+        setattr(obj, key, current)
+        return
     members = getattr(type(current), "__members__", None)
     if isinstance(value, str) and members is not None:
         if value not in members:
@@ -262,7 +325,8 @@ def run(
     """Solve one problem with solver ``name``.
 
     Args:
-        name: ``"amen"``, ``"sweep"`` or ``"cross"``.
+        name: ``"amen"``, ``"sweep"``, ``"cross"``, ``"galerkin"`` or a preset
+            (``PRESETS``, e.g. ``"galerkin:deim"``).
         mesh: A finalized ``IGAMesh``, built for this run only (the drivers
             partition it across MPI ranks).
         xs_server: The cross-section ``Server``.
@@ -270,19 +334,25 @@ def run(
         eigenvalue: Solve the k-eigenvalue problem, else the fixed-source problem.
         balance: Keep what particle balances need (``result.global_balance()``,
             ``result.patch_balance_table()``): the assemblers for ``amen``, the
-            angular flux for ``sweep`` / ``cross``.
+            angular flux for ``sweep`` / ``cross`` / ``galerkin``.
         opts: Per-solver settings of the test, ``{"amen": {...}, ...}``; only
             ``opts[name]`` is used.
         overrides: Per-solver settings that win over ``opts`` (from
             ``--solver-opt``).
     """
-    if name not in SOLVERS:
-        raise ValueError(f"Unknown solver '{name}', expected one of {SOLVERS}")
-    settings = merge(DEFAULTS[name], (opts or {}).get(name, {}))
-    settings = merge(settings, (overrides or {}).get(name, {}))
+    if name not in NAMES:
+        raise ValueError(f"Unknown solver '{name}', expected one of {NAMES}")
+    base = base_solver(name)
+    opts, overrides = opts or {}, overrides or {}
+    settings = merge(DEFAULTS[base], opts.get(base, {}))
+    if name != base:
+        settings = merge(merge(settings, PRESETS[name]), opts.get(name, {}))
+    settings = merge(settings, overrides.get(base, {}))
+    if name != base:
+        settings = merge(settings, overrides.get(name, {}))
     num_dim = mesh.blocks[0].ndim  # spatial dimension (qset.ndim is angular)
 
-    if name == "amen":
+    if base == "amen":
         return _run_amen(mesh, xs_server, qset, num_dim, eigenvalue, balance, settings)
     return _run_sweep(
         name, mesh, xs_server, qset, num_dim, eigenvalue, balance, settings
@@ -382,14 +452,17 @@ def _run_sweep(name, mesh, xs_server, qset, num_dim, eigenvalue, balance, s):
     s = dict(s)
     k_tol = s.pop("k_tol")
     cross = s.pop("cross", {})
+    galerkin = s.pop("galerkin", {})
 
     config = SweepConfig()
     for key, value in s.items():
-        if key in ("num_threads", "cross_threads") and value is None:
+        if key in ("num_threads", "sampling_threads") and value is None:
             value = torch.get_num_threads()
         _set(config, key, value, name)
     for key, value in cross.items():
         _set(config.cross, key, value, f"{name}.cross")
+    for key, value in galerkin.items():
+        _set(config.galerkin, key, value, f"{name}.galerkin")
     if balance:
         config.store_angular_flux = True
 
@@ -407,12 +480,15 @@ def _run_sweep(name, mesh, xs_server, qset, num_dim, eigenvalue, balance, s):
         "converged": driver.converged,
         "equivalent sweeps": driver.equivalent_sweeps,
     }
-    if name == "cross" and len(driver.cross_ranks) > 0:
-        stats["final cross ranks"] = driver.cross_ranks[-1]
+    records = driver.sampling_records
+    if records:
+        stats[f"final {name} ranks"] = list(records[-1].ranks)
+    if base_solver(name) == "galerkin":
+        stats["dropped snapshots"] = sum(r.dropped_snapshots for r in records)
 
     return RunResult(
         solver=name,
-        settings=s | {"k_tol": k_tol, "cross": cross},
+        settings=s | {"k_tol": k_tol, "cross": cross, "galerkin": galerkin},
         solution=solution,
         scalar=solution.compute_scalar_flux() if angular else solution,
         k_eff=driver.k_eff if eigenvalue else None,
@@ -430,9 +506,10 @@ class Solver:
     ``--solver-opt`` overrides of this pytest run."""
 
     def __init__(self, name: str, overrides: dict | None = None):
-        if name not in SOLVERS:
-            raise ValueError(f"Unknown solver '{name}', expected one of {SOLVERS}")
+        if name not in NAMES:
+            raise ValueError(f"Unknown solver '{name}', expected one of {NAMES}")
         self.name = name
+        self.base = base_solver(name)
         self.overrides = overrides or {}
 
     def run(self, mesh, xs_server, qset, **kwargs) -> RunResult:

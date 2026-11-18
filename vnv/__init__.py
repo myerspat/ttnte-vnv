@@ -8,7 +8,7 @@ import torch
 from ttnte import mpi_context
 
 from vnv.compare import flux_errors, record, zscores
-from vnv.solvers import DEFAULTS, SOLVERS, RunResult, Solver, run
+from vnv.solvers import DEFAULTS, NAMES, PRESETS, SOLVERS, RunResult, Solver, run
 
 
 def setup(max_ranks=None, dtype=torch.float64):
@@ -26,6 +26,8 @@ def setup(max_ranks=None, dtype=torch.float64):
 
 __all__ = [
     "DEFAULTS",
+    "NAMES",
+    "PRESETS",
     "SOLVERS",
     "RunResult",
     "Solver",

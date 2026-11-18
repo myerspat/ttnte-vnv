@@ -39,7 +39,8 @@ OPTS = {
         "freeze_eps": 1e-6,
     },
     "sweep": {"tol": 1e-5, "num_threads": 2},
-    "cross": {"tol": 1e-5, "num_threads": 2, "cross_threads": 2},
+    "cross": {"tol": 1e-5, "num_threads": 2, "sampling_threads": 2},
+    "galerkin": {"tol": 1e-5, "num_threads": 2, "sampling_threads": 2},
 }
 
 
@@ -195,7 +196,8 @@ OPTS_4PATCH = {
         "freeze_eps": 1e-6,
     },
     "sweep": {"tol": 1e-7, "num_threads": 1},
-    "cross": {"tol": 1e-7, "num_threads": 1, "cross_threads": 1},
+    "cross": {"tol": 1e-7, "num_threads": 1, "sampling_threads": 1},
+    "galerkin": {"tol": 1e-7, "num_threads": 1, "sampling_threads": 1},
 }
 
 
