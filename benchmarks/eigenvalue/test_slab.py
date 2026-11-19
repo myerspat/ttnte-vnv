@@ -27,9 +27,13 @@ OPTS = {
             "max_rank": 500,
         },
     },
-    "sweep": {"tol": 1e-5, "num_threads": 2},
-    "cross": {"tol": 1e-5, "num_threads": 2, "sampling_threads": 2},
-    "galerkin": {"tol": 1e-5, "num_threads": 2, "sampling_threads": 2},
+    "sweep": {"tol": 1e-5, "num_threads": 4},
+    "cross": {"tol": 1e-5, "num_threads": 4, "sampling_threads": 4},
+    "galerkin": {"tol": 1e-5, "num_threads": 4, "sampling_threads": 4},
+    # Source iteration's stopping test (the change between iterates)
+    # understates the error here: at tol = 1e-5 even the exact sweeper under
+    # RICHARDSON is 5.9 pcm off (1e-6: 0.8 pcm)
+    "galerkin:deim": {"tol": 1e-6},
 }
 
 

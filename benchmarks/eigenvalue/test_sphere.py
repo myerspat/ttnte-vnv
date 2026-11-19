@@ -38,9 +38,9 @@ OPTS = {
         },
         "freeze_eps": 5e-5,
     },
-    "sweep": {"tol": 1e-5, "num_threads": 2},
-    "cross": {"tol": 1e-5, "num_threads": 2, "sampling_threads": 2},
-    "galerkin": {"tol": 1e-5, "num_threads": 2, "sampling_threads": 2},
+    "sweep": {"tol": 1e-5, "num_threads": 4},
+    "cross": {"tol": 1e-5, "num_threads": 4, "sampling_threads": 4},
+    "galerkin": {"tol": 1e-5, "num_threads": 4, "sampling_threads": 4},
 }
 
 
