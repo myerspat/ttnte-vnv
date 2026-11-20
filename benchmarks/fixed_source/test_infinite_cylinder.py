@@ -203,11 +203,7 @@ OPTS_4PATCH = {
 
 @pytest.mark.mpi(min_size=1)
 def test_infinite_cylinder_4patch(request, solver):
-    # Han et al.'s DEIM source iteration (no DSA) diverges here: 306 DEIM rows
-    # of 4096 directions give a poorly conditioned interpolation (Lebesgue
-    # constant 133, effective weights with sum |c| = 3.3), which amplifies the
-    # slow modes of the strongly scattering source past 1 (QDEIM only slows
-    # it; with our update_on_growth and galerkin_flux it stalls near 1e-7)
+    # Skip DEIM because it's unstable
     if solver.name == "galerkin:deim":
         pytest.skip("Han et al.'s DEIM source iteration diverges on this problem")
     # ========================================================================

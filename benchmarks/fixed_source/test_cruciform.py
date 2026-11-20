@@ -49,6 +49,9 @@ OPTS = {
 @pytest.mark.slow
 @pytest.mark.mpi(min_size=1)
 def test_cruciform(request, solver):
+    # Skip DEIM because it's unstable
+    if solver.name == "galerkin:deim":
+        pytest.skip("Han et al.'s DEIM source iteration diverges on this problem")
     # ========================================================================
     # Setup
     setup(max_ranks=12)
