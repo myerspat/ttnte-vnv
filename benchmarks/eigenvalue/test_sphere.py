@@ -13,7 +13,7 @@ from ttnte.mesh import IGAMesh
 from ttnte.physics import BoundaryType, BCPlane
 from ttnte.math import ProductQuadrature
 
-from vnv import record, setup
+from vnv import plot_stem, record, setup
 
 # Solver settings for this problem, merged over vnv.solvers.DEFAULTS
 # (--solver-opt on the command line wins over these)
@@ -344,7 +344,7 @@ def test_sphere(request, solver):
     style = get_patch_style(backend)
     style.normal = (0, 0, 1)
     style.origin = (0, 0, 1)
-    generated_plots.append(f"{request.node.name}_model_2d.png")
+    generated_plots.append(f"{plot_stem(request)}_model_2d.png")
     mesh.plot(
         resolution=25,
         show_boundary=True,
@@ -356,7 +356,7 @@ def test_sphere(request, solver):
     # Plot the full 3-D geometry
     backend = "pyvista"
     style = get_patch_style(backend)
-    generated_plots.append(f"{request.node.name}_model_3d.png")
+    generated_plots.append(f"{plot_stem(request)}_model_3d.png")
     plotter = mesh.plot(
         resolution=25,
         show_ctrlpts=True,
@@ -383,7 +383,7 @@ def test_sphere(request, solver):
     style = get_patch_style(backend)
     style.normal = (0, 0, 1)
     style.origin = (0, 0, 1)
-    generated_plots.append(f"{request.node.name}_flux_2d.png")
+    generated_plots.append(f"{plot_stem(request)}_flux_2d.png")
     mesh.plot(
         resolution=25,
         backend=backend,
@@ -396,7 +396,7 @@ def test_sphere(request, solver):
     # Plot the full 3-D geometry
     backend = "pyvista"
     style = get_patch_style(backend)
-    generated_plots.append(f"{request.node.name}_flux_3d.png")
+    generated_plots.append(f"{plot_stem(request)}_flux_3d.png")
     plotter = mesh.plot(
         resolution=25,
         solution=scalar_result.select_group(0),
@@ -445,7 +445,7 @@ def test_sphere(request, solver):
         plt.xlabel(r"Azimuth $\varphi$")
         plt.ylabel(r"Elevation $\theta$")
         plt.tight_layout()
-        generated_plots.append(f"{request.node.name}_shell_{frac}rc.png")
+        generated_plots.append(f"{plot_stem(request)}_shell_{frac}rc.png")
         plt.savefig(generated_plots[-1], dpi=300)
 
     # ========================================================================

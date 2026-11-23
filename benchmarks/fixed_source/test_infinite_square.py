@@ -12,7 +12,7 @@ from ttnte.mesh import IGAMesh
 from ttnte.physics import FixedSource
 from ttnte.xs import Material, Server
 
-from vnv import flux_errors, record, setup, zscores
+from vnv import flux_errors, plot_stem, record, setup, zscores
 
 # Solver settings for this problem, merged over vnv.solvers.DEFAULTS
 # (--solver-opt on the command line wins over these)
@@ -114,7 +114,7 @@ def test_infinite_square(request, solver):
 
     # ========================================================================
     # Plot mesh
-    generated_plots.append(f"fixed_source_{request.node.name}_model.png")
+    generated_plots.append(f"fixed_source_{plot_stem(request)}_model.png")
     mesh.plot(
         resolution=25,
         show_ctrlpts=True,
@@ -132,7 +132,7 @@ def test_infinite_square(request, solver):
 
     # ========================================================================
     # Plot the solution
-    generated_plots.append(f"fixed_source_{request.node.name}_flux.png")
+    generated_plots.append(f"fixed_source_{plot_stem(request)}_flux.png")
     mesh.plot(
         resolution=25,
         solution=result.scalar,
@@ -182,7 +182,7 @@ def test_infinite_square(request, solver):
         phi_mc,
         phi_mc_stdev,
         extent=(0, length, 0, length),
-        prefix=f"fixed_source_{request.node.name}",
+        prefix=f"fixed_source_{plot_stem(request)}",
     )
     generated_plots += plots
 

@@ -24,6 +24,17 @@ def setup(max_ranks=None, dtype=torch.float64):
     torch.autograd.set_grad_enabled(False)
 
 
+# Characters actions/upload-artifact rejects in file names (Windows-invalid)
+_UNSAFE = str.maketrans({c: "-" for c in ':"<>|*?\r\n'})
+
+
+def plot_stem(request):
+    """The test id as a file-name stem for plots (``{stem}_flux.png``): the
+    node name with the characters artifact uploads reject replaced by "-", e.g.
+    ``test_slab[galerkin:deim]`` -> ``test_slab[galerkin-deim]``."""
+    return request.node.name.translate(_UNSAFE)
+
+
 __all__ = [
     "DEFAULTS",
     "NAMES",
@@ -32,6 +43,7 @@ __all__ = [
     "RunResult",
     "Solver",
     "flux_errors",
+    "plot_stem",
     "record",
     "run",
     "setup",

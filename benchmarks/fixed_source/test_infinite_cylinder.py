@@ -13,7 +13,7 @@ from ttnte.physics import BCPlane, BoundaryType, FixedSource
 from ttnte.visualization.style import get_patch_style
 from ttnte.xs import Material, Server
 
-from vnv import flux_errors, record, setup, zscores
+from vnv import flux_errors, plot_stem, record, setup, zscores
 
 # Solver settings for this problem, merged over vnv.solvers.DEFAULTS
 # (--solver-opt on the command line wins over these)
@@ -98,7 +98,7 @@ def test_infinite_cylinder(request, solver):
 
     # ========================================================================
     # Plot mesh
-    generated_plots.append(f"fixed_source_{request.node.name}_model.png")
+    generated_plots.append(f"fixed_source_{plot_stem(request)}_model.png")
     mesh.plot(
         resolution=25,
         show_ctrlpts=True,
@@ -116,7 +116,7 @@ def test_infinite_cylinder(request, solver):
 
     # ========================================================================
     # Plot the solution
-    generated_plots.append(f"fixed_source_{request.node.name}_flux.png")
+    generated_plots.append(f"fixed_source_{plot_stem(request)}_flux.png")
     mesh.plot(
         resolution=25,
         solution=result.scalar,
@@ -297,7 +297,7 @@ def test_infinite_cylinder_4patch(request, solver):
 
     # ========================================================================
     # Plot mesh
-    generated_plots.append(f"{request.node.name}_model.png")
+    generated_plots.append(f"{plot_stem(request)}_model.png")
     backend = "matplotlib"
     style = get_patch_style(backend)
     style.mesh.cmap = {
@@ -322,7 +322,7 @@ def test_infinite_cylinder_4patch(request, solver):
 
     # ========================================================================
     # Plot the solution
-    generated_plots.append(f"fixed_source_{request.node.name}_flux.png")
+    generated_plots.append(f"fixed_source_{plot_stem(request)}_flux.png")
     mesh.plot(
         resolution=25,
         solution=result.scalar,
@@ -374,7 +374,7 @@ def test_infinite_cylinder_4patch(request, solver):
         phi_mc,
         phi_mc_stdev,
         extent=(0, pitch / 2, 0, pitch / 2),
-        prefix=f"fixed_source_{request.node.name}",
+        prefix=f"fixed_source_{plot_stem(request)}",
     )
     generated_plots += plots
 

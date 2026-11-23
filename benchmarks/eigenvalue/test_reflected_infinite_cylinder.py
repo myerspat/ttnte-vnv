@@ -10,7 +10,7 @@ from ttnte.cad import Patch
 from ttnte.mesh import IGAMesh
 from ttnte.math import ProductQuadrature
 
-from vnv import record, setup
+from vnv import plot_stem, record, setup
 
 # Solver settings for this problem, merged over vnv.solvers.DEFAULTS
 # (--solver-opt on the command line wins over these)
@@ -125,7 +125,7 @@ def test_reflected_infinite_cylinder(request, solver):
 
     # ========================================================================
     # Plot mesh
-    generated_plots.append(f"{request.node.name}_model.png")
+    generated_plots.append(f"{plot_stem(request)}_model.png")
     backend = "matplotlib"
     style = get_patch_style(backend)
     style.mesh.cmap = {
@@ -148,7 +148,7 @@ def test_reflected_infinite_cylinder(request, solver):
 
     # ========================================================================
     # Plot the solution
-    generated_plots.append(f"{request.node.name}_flux.png")
+    generated_plots.append(f"{plot_stem(request)}_flux.png")
     mesh.plot(
         resolution=25,
         field_label=r"$\phi$",

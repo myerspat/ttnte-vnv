@@ -13,7 +13,7 @@ from ttnte.math import ProductQuadrature
 from ttnte.visualization.style import get_patch_style
 from ttnte.xs.benchmarks import kaist
 
-from vnv import flux_errors, record, setup, zscores
+from vnv import flux_errors, plot_stem, record, setup, zscores
 
 # Solver settings for this problem, merged over vnv.solvers.DEFAULTS
 # (--solver-opt on the command line wins over these)
@@ -177,7 +177,7 @@ def test_cruciform(request, solver, displacer):
 
     # ========================================================================
     # Plot mesh
-    generated_plots.append(f"{request.node.name}_model.png")
+    generated_plots.append(f"{plot_stem(request)}_model.png")
     backend = "matplotlib"
     style = get_patch_style(backend)
     style.mesh.cmap = {
@@ -230,7 +230,7 @@ def test_cruciform(request, solver, displacer):
     # ========================================================================
     # Plot the solution
     for g in range(xs_server.num_groups):
-        generated_plots.append(f"{request.node.name}_flux_{g + 1}.png")
+        generated_plots.append(f"{plot_stem(request)}_flux_{g + 1}.png")
         mesh.plot(
             resolution=25,
             solution=result.scalar.select_group(g),
@@ -271,7 +271,7 @@ def test_cruciform(request, solver, displacer):
         phi_mc,
         phi_mc_stdev,
         extent=(0, X / 2, 0, X / 2),
-        prefix=request.node.name,
+        prefix=plot_stem(request),
     )
     generated_plots += plots
 

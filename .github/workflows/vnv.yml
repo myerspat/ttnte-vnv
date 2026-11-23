@@ -92,8 +92,10 @@ jobs:
           retention-days: 90
 
       # Cross transport solves are serial in space for now: the Makefile's
-      # MPI_SOLVERS default is amen and sweep only
+      # MPI_SOLVERS default is amen and sweep only. Runs even when an earlier
+      # step failed (a failing 1-rank suite or upload), but not when cancelled
       - name: Run V&V suite (2 MPI ranks)
+        if: success() || failure()
         run: |
           make limited-mpi NP=2 XVFB="xvfb-run -a"
 

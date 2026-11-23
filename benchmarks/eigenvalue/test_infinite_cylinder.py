@@ -11,7 +11,7 @@ from ttnte.cad import Patch
 from ttnte.mesh import IGAMesh
 from ttnte.math import ProductQuadrature
 
-from vnv import record, setup
+from vnv import plot_stem, record, setup
 
 # Solver settings for this problem, merged over vnv.solvers.DEFAULTS
 # (--solver-opt on the command line wins over these)
@@ -149,7 +149,7 @@ def test_infinite_cylinder(request, solver):
 
     # ========================================================================
     # Plot mesh
-    generated_plots.append(f"{request.node.name}_model.png")
+    generated_plots.append(f"{plot_stem(request)}_model.png")
     mesh.plot(
         resolution=25,
         show_ctrlpts=True,
@@ -166,7 +166,7 @@ def test_infinite_cylinder(request, solver):
     # ========================================================================
     # Plot the solution
     scalar_result = result.scalar
-    generated_plots.append(f"{request.node.name}_flux.png")
+    generated_plots.append(f"{plot_stem(request)}_flux.png")
     mesh.plot(
         resolution=25,
         solution=scalar_result.select_group(0),
@@ -214,7 +214,7 @@ def test_infinite_cylinder(request, solver):
     )
     plt.grid()
     plt.tight_layout()
-    generated_plots.append(f"{request.node.name}_rc.png")
+    generated_plots.append(f"{plot_stem(request)}_rc.png")
     plt.savefig(generated_plots[-1], dpi=300)
 
     # Check the L2-error is less than 0.008
@@ -258,7 +258,7 @@ def test_infinite_cylinder(request, solver):
     )
     plt.grid()
     plt.tight_layout()
-    generated_plots.append(f"{request.node.name}_rc0.5.png")
+    generated_plots.append(f"{plot_stem(request)}_rc0.5.png")
     plt.savefig(generated_plots[-1], dpi=300)
 
     # Check the L2-error is less than 0.0002
